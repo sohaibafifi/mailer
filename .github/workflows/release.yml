@@ -44,6 +44,14 @@ jobs:
           TAURI_UPDATER_PUBKEY: ${{ secrets.TAURI_UPDATER_PUBKEY }}
         run: npm run release:prepare
 
+      - name: Debug secret fingerprints (no leak)
+        env:
+          K: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          P: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          echo "key len=$(printf %s "$K" | wc -c)  sha=$(printf %s "$K" | shasum | head -c 12)"
+          echo "pwd len=$(printf %s "$P" | wc -c)  sha=$(printf %s "$P" | shasum | head -c 12)"
+
       - name: Build release
         uses: tauri-apps/tauri-action@v0
         env:

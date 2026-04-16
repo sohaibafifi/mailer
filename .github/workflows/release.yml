@@ -44,20 +44,21 @@ jobs:
           TAURI_UPDATER_PUBKEY: ${{ secrets.TAURI_UPDATER_PUBKEY }}
         run: npm run release:prepare
 
-      - name: Debug secret fingerprints (no leak)
+      - name: Write Tauri signing key to disk
         env:
-          K: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          P: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          TAURI_SIGNING_PRIVATE_KEY_B64: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        shell: bash
         run: |
-          echo "key len=$(printf %s "$K" | wc -c)  sha=$(printf %s "$K" | shasum | head -c 12)"
-          echo "pwd len=$(printf %s "$P" | wc -c)  sha=$(printf %s "$P" | shasum | head -c 12)"
+          mkdir -p "$HOME/.tauri"
+          printf '%s' "$TAURI_SIGNING_PRIVATE_KEY_B64" | base64 -d > "$HOME/.tauri/mailer.key"
+          chmod 600 "$HOME/.tauri/mailer.key"
+          echo "TAURI_SIGNING_PRIVATE_KEY_PATH=$HOME/.tauri/mailer.key" >> "$GITHUB_ENV"
 
       - name: Build release
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          # TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           tagName: ${{ github.ref_name }}
           releaseName: "Mailer ${{ github.ref_name }}"

@@ -39,6 +39,11 @@ jobs:
       - name: Install frontend dependencies
         run: npm install
 
+      - name: Inject Tauri updater public key
+        env:
+          TAURI_UPDATER_PUBKEY: ${{ secrets.TAURI_UPDATER_PUBKEY }}
+        run: npm run release:prepare
+
       - name: Build release
         uses: tauri-apps/tauri-action@v0
         env:

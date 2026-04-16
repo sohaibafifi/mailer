@@ -4,11 +4,10 @@
   },
   "plugins": {
     "updater": {
-      "pubkey": "REPLACE_WITH_TAURI_PUBLIC_KEY",
+      "pubkey": "",
       "endpoints": [
-        "https://github.com/OWNER/ArtoisMailer/releases/latest/download/latest.json"
+        "https://github.com/sohaibafifi/Mailer/releases/latest/download/latest.json"
       ]
     }
   }
 }
-

@@ -1,6 +1,9 @@
 import { invoke } from "@tauri-apps/api/core";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type {
+  CampaignProgress,
   MailingTemplate,
+  PreviewSample,
   RenderedPreview,
   SendCampaignRequest,
   SendSummary,
@@ -43,11 +46,34 @@ export function previewTemplate(input: TemplateInput, row: Record<string, string
   return invoke<RenderedPreview>("preview_template", { input, row });
 }
 
+export function previewTemplateSamples(
+  input: TemplateInput,
+  excelPath: string,
+  sheetName: string | null,
+  recipientField: string | null,
+  count: number,
+) {
+  return invoke<PreviewSample[]>("preview_template_samples", {
+    input,
+    excelPath,
+    sheetName,
+    recipientField,
+    count,
+  });
+}
+
 export function sendCampaign(request: SendCampaignRequest) {
   return invoke<SendSummary>("send_campaign", { request });
+}
+
+export function cancelCampaign() {
+  return invoke<void>("cancel_campaign");
+}
+
+export function onCampaignProgress(handler: (progress: CampaignProgress) => void): Promise<UnlistenFn> {
+  return listen<CampaignProgress>("campaign:progress", (event) => handler(event.payload));
 }
 
 export function downloadAndInstallUpdate() {
   return invoke<UpdateCheckResult>("download_and_install_update");
 }
-

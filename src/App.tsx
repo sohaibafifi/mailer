@@ -1,24 +1,32 @@
 import { useEffect, useMemo, useState } from "react";
 import {
+  cancelCampaign,
   deleteTemplate,
   downloadAndInstallUpdate,
   loadSmtpConfig,
   loadTemplates,
+  onCampaignProgress,
   pickExcelFile,
-  previewTemplate,
+  previewTemplateSamples,
   saveSmtpConfig,
   saveTemplate,
   sendCampaign,
   sendSmtpTest,
 } from "./api";
 import type {
+  CampaignProgress,
   MailingTemplate,
+  PreviewSample,
   RenderedPreview,
   SendSummary,
   SmtpConfigInput,
   TemplateInput,
   WorkbookPreview,
 } from "./types";
+import RichHtmlEditor from "./RichHtmlEditor";
+import ConfirmDialog from "./ConfirmDialog";
+import { sanitizeEmailHtml } from "./sanitize";
+import logoUrl from "./assets/logo.svg";
 
 const emptyTemplate: TemplateInput = {
   id: null,
@@ -26,15 +34,15 @@ const emptyTemplate: TemplateInput = {
   subject: "Bonjour {{prenom}}",
   bodyHtml:
     "<p>Bonjour {{prenom}},</p><p>Nous revenons vers vous au sujet de {{societe}}.</p><p>Cordialement,</p>",
-  bodyText: "Bonjour {{prenom}},\n\nNous revenons vers vous au sujet de {{societe}}.\n\nCordialement,",
+  bodyText: "",
 };
 
 const emptySmtp: SmtpConfigInput = {
-  host: "",
+  host: "smtprouter.univ-artois.fr",
   port: 587,
   security: "startTls",
-  username: "",
-  fromEmail: "",
+  username: "prenom.nom@univ-artois.fr",
+  fromEmail: "prenom.nom@univ-artois.fr",
   fromName: "",
   replyTo: null,
   password: null,
@@ -44,9 +52,19 @@ const emptySmtp: SmtpConfigInput = {
 const defaultRateLimit = {
   maxPerMinute: "30",
   minDelayMs: "1000",
-  batchSize: "",
-  batchPauseSeconds: "",
+  batchSize: "4",
+  batchPauseSeconds: "1",
 };
+
+type PanelId = "templates" | "excel" | "configuration" | "send" | "about";
+
+const panels: Array<{ id: PanelId; label: string }> = [
+  { id: "templates", label: "Modèles" },
+  { id: "excel", label: "Excel" },
+  { id: "configuration", label: "Configuration" },
+  { id: "send", label: "Envoi" },
+  { id: "about", label: "À propos" },
+];
 
 type Notice = {
   kind: "idle" | "success" | "error" | "info";
@@ -91,21 +109,29 @@ function App() {
   const [workbook, setWorkbook] = useState<WorkbookPreview | null>(null);
   const [recipientField, setRecipientField] = useState("");
   const [smtp, setSmtp] = useState<SmtpConfigInput>(emptySmtp);
+  const [smtpPasswordSaved, setSmtpPasswordSaved] = useState(false);
   const [testEmail, setTestEmail] = useState("");
   const [sendLimit, setSendLimit] = useState("");
   const [rateLimit, setRateLimit] = useState(defaultRateLimit);
   const [preview, setPreview] = useState<RenderedPreview | null>(null);
+  const [previewSamples, setPreviewSamples] = useState<PreviewSample[]>([]);
+  const [previewIndex, setPreviewIndex] = useState(0);
   const [summary, setSummary] = useState<SendSummary | null>(null);
   const [notice, setNotice] = useState<Notice>({ kind: "idle", text: "Prêt." });
+  const [activePanel, setActivePanel] = useState<PanelId>("templates");
   const [busy, setBusy] = useState(false);
+  const [progress, setProgress] = useState<CampaignProgress | null>(null);
+  const [sending, setSending] = useState(false);
+  const [confirmSend, setConfirmSend] = useState(false);
 
   const selectedTemplate = useMemo(
     () => templates.find((template) => template.id === draft.id) ?? null,
     [draft.id, templates],
   );
 
-  const sampleRow = workbook?.rows[0]?.values ?? null;
   const placeholders = workbook?.fields.map((field) => `{{${field.key}}}`) ?? [];
+  const currentPreviewSample = previewSamples[previewIndex] ?? null;
+  const currentPreview = currentPreviewSample ?? preview;
   const effectiveDelayMs = useMemo(() => {
     const minDelay = Number(rateLimit.minDelayMs.trim() || "0");
     const maxPerMinute = Number(rateLimit.maxPerMinute.trim() || "0");
@@ -133,6 +159,7 @@ function App() {
             password: null,
             clearPassword: false,
           });
+          setSmtpPasswordSaved(savedSmtp.passwordSaved);
         }
       } catch (error) {
         setNotice({ kind: "error", text: getError(error) });
@@ -145,6 +172,21 @@ function App() {
     setRecipientField(findEmailField(workbook));
   }, [workbook]);
 
+  useEffect(() => {
+    const unlistenPromise = onCampaignProgress((payload) => {
+      setProgress(payload);
+    });
+    return () => {
+      unlistenPromise.then((unlisten) => unlisten()).catch(() => undefined);
+    };
+  }, []);
+
+  const safePreviewHtml = useMemo(
+    () => (currentPreview ? sanitizeEmailHtml(currentPreview.bodyHtml) : ""),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [currentPreviewSample, preview],
+  );
+
   async function runTask(task: () => Promise<void>, fallback = "Action impossible.") {
     setBusy(true);
     try {
@@ -156,15 +198,21 @@ function App() {
     }
   }
 
+  function clearPreview() {
+    setPreview(null);
+    setPreviewSamples([]);
+    setPreviewIndex(0);
+  }
+
   function startNewTemplate() {
     setDraft(emptyTemplate);
-    setPreview(null);
+    clearPreview();
     setSummary(null);
   }
 
   function selectTemplate(template: MailingTemplate) {
     setDraft(template);
-    setPreview(null);
+    clearPreview();
     setSummary(null);
   }
 
@@ -189,7 +237,7 @@ function App() {
       const saved = await deleteTemplate(draft.id ?? "");
       setTemplates(saved);
       setDraft(saved[0] ?? emptyTemplate);
-      setPreview(null);
+      clearPreview();
       setNotice({ kind: "success", text: "Modèle supprimé." });
     });
   }
@@ -202,6 +250,7 @@ function App() {
         return;
       }
       setWorkbook(picked);
+      clearPreview();
       setSummary(null);
       setNotice({
         kind: "success",
@@ -211,19 +260,28 @@ function App() {
   }
 
   async function handlePreview() {
-    if (!sampleRow) {
+    if (!workbook || workbook.totalRows === 0) {
       setNotice({ kind: "error", text: "Importez un fichier Excel avant la prévisualisation." });
       return;
     }
     await runTask(async () => {
-      const rendered = await previewTemplate(draft, sampleRow);
-      setPreview(rendered);
-      setNotice({ kind: "success", text: "Prévisualisation générée." });
+      const samples = await previewTemplateSamples(
+        draft,
+        workbook.path,
+        workbook.sheetName,
+        recipientField || null,
+        10,
+      );
+      setPreviewSamples(samples);
+      setPreviewIndex(0);
+      setPreview(samples[0] ?? null);
+      setNotice({ kind: "success", text: `${samples.length} prévisualisations générées.` });
     });
   }
 
   async function handleSaveSmtp() {
     await runTask(async () => {
+      const passwordForSession = smtp.password?.trim() ? smtp.password : null;
       const saved = await saveSmtpConfig(smtp);
       setSmtp({
         host: saved.host,
@@ -233,9 +291,10 @@ function App() {
         fromEmail: saved.fromEmail,
         fromName: saved.fromName,
         replyTo: saved.replyTo,
-        password: null,
+        password: passwordForSession,
         clearPassword: false,
       });
+      setSmtpPasswordSaved(saved.passwordSaved);
       setNotice({ kind: "success", text: "Configuration SMTP sauvegardée." });
     });
   }
@@ -243,6 +302,10 @@ function App() {
   async function handleSmtpTest() {
     if (!testEmail.trim()) {
       setNotice({ kind: "error", text: "Renseignez une adresse de test." });
+      return;
+    }
+    if (smtp.username.trim() && !smtp.password?.trim() && !smtpPasswordSaved) {
+      setNotice({ kind: "error", text: "Saisissez le mot de passe SMTP avant de tester." });
       return;
     }
     await runTask(async () => {
@@ -301,38 +364,46 @@ function App() {
     };
   }
 
-  async function handleDryRun() {
-    await runTask(async () => {
-      const result = await sendCampaign(buildSendRequest(true, null));
-      setSummary(result);
-      setPreview(result.preview);
-      setNotice({ kind: "success", text: "Simulation terminée sans envoi SMTP." });
-    });
-  }
-
-  async function handleSendTestCampaign() {
-    if (!testEmail.trim()) {
-      setNotice({ kind: "error", text: "Renseignez une adresse de test." });
-      return;
+  function requestSendCampaign() {
+    try {
+      buildSendRequest(false, null);
+      setConfirmSend(true);
+    } catch (error) {
+      setNotice({ kind: "error", text: getError(error) });
     }
-    await runTask(async () => {
-      const result = await sendCampaign(buildSendRequest(false, testEmail.trim()));
-      setSummary(result);
-      setPreview(result.preview);
-      setNotice({ kind: "success", text: "Email de test envoyé avec les données de la première ligne." });
-    });
   }
 
   async function handleSendCampaign() {
+    setConfirmSend(false);
+    setSending(true);
+    setProgress(null);
     await runTask(async () => {
-      const result = await sendCampaign(buildSendRequest(false, null));
-      setSummary(result);
-      setPreview(result.preview);
-      setNotice({
-        kind: result.failed.length > 0 ? "error" : "success",
-        text: `${result.sent} envoyés, ${result.skipped} ignorés, ${result.failed.length} erreurs.`,
-      });
+      try {
+        const result = await sendCampaign(buildSendRequest(false, null));
+        setSummary(result);
+        setPreview(result.preview);
+        setPreviewSamples([]);
+        setPreviewIndex(0);
+        const cancelled = progress?.status === "cancelled";
+        setNotice({
+          kind: result.failed.length > 0 ? "error" : cancelled ? "info" : "success",
+          text: cancelled
+            ? `Envoi interrompu: ${result.sent} envoyés, ${result.failed.length} erreurs.`
+            : `${result.sent} envoyés, ${result.skipped} ignorés, ${result.failed.length} erreurs.`,
+        });
+      } finally {
+        setSending(false);
+      }
     });
+  }
+
+  async function handleCancelCampaign() {
+    try {
+      await cancelCampaign();
+      setNotice({ kind: "info", text: "Annulation demandée..." });
+    } catch (error) {
+      setNotice({ kind: "error", text: getError(error) });
+    }
   }
 
   async function handleUpdate() {
@@ -345,51 +416,44 @@ function App() {
   return (
     <main className="app-shell">
       <header className="topbar">
-        <div>
-          <p className="eyebrow">ArtoisMailer</p>
-          <h1>Publipostage email</h1>
+        <div className="brand">
+          <div className="brand-mark" aria-hidden="true">
+            <img src={logoUrl} alt="" />
+          </div>
+          <div className="brand-text">
+            <p className="eyebrow">Mailer</p>
+            <h1>Publipostage email</h1>
+          </div>
         </div>
-        <div className="topbar-actions">
-          <button className="ghost" type="button" onClick={handleUpdate} disabled={busy}>
-            Vérifier les mises à jour
-          </button>
-          <span className={`notice ${notice.kind}`}>{notice.text}</span>
-        </div>
+        <span className={`notice ${notice.kind}`}>{notice.text}</span>
       </header>
 
-      <section className="workspace">
-        <aside className="sidebar">
-          <button type="button" className="primary" onClick={startNewTemplate} disabled={busy}>
-            Nouveau modèle
+      <nav className="panel-tabs" aria-label="Navigation principale">
+        {panels.map((panel) => (
+          <button
+            key={panel.id}
+            type="button"
+            className={activePanel === panel.id ? "tab active" : "tab"}
+            onClick={() => setActivePanel(panel.id)}
+          >
+            {panel.label}
           </button>
-          <div className="template-list" aria-label="Modèles sauvegardés">
-            {templates.length === 0 ? (
-              <p className="muted">Aucun modèle sauvegardé.</p>
-            ) : (
-              templates.map((template) => (
-                <button
-                  key={template.id}
-                  type="button"
-                  className={template.id === selectedTemplate?.id ? "template-item active" : "template-item"}
-                  onClick={() => selectTemplate(template)}
-                >
-                  <strong>{template.name}</strong>
-                  <span>{template.subject}</span>
-                </button>
-              ))
-            )}
-          </div>
-        </aside>
+        ))}
+      </nav>
 
-        <section className="main-column">
+      <section className="workspace">
+        {activePanel === "templates" ? (
           <section className="panel">
             <div className="panel-heading">
               <div>
-                <h2>1. Modèle</h2>
-                <p>Rédigez le sujet et le contenu HTML avec les champs Excel entre doubles accolades.</p>
+                <h2>Modèles</h2>
+                <p>Choisissez un modèle ou créez-en un nouveau.</p>
               </div>
               <div className="button-row">
-                <button type="button" className="ghost" onClick={handleDeleteTemplate} disabled={busy}>
+                <button type="button" className="ghost" onClick={startNewTemplate} disabled={busy}>
+                  Nouveau
+                </button>
+                <button type="button" className="ghost" onClick={handleDeleteTemplate} disabled={busy || !draft.id}>
                   Supprimer
                 </button>
                 <button type="button" className="primary" onClick={handleSaveTemplate} disabled={busy}>
@@ -397,7 +461,29 @@ function App() {
                 </button>
               </div>
             </div>
-            <div className="form-grid">
+
+            <label>
+              Modèle sauvegardé
+              <select
+                value={draft.id ?? ""}
+                onChange={(event) => {
+                  const template = templates.find((item) => item.id === event.target.value);
+                  if (template) {
+                    selectTemplate(template);
+                  }
+                }}
+              >
+                <option value="" disabled>
+                  {templates.length ? "Sélectionner" : "Aucun modèle sauvegardé"}
+                </option>
+                {templates.map((template) => (
+                  <option key={template.id} value={template.id}>
+                    {template.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <div className="template-name-row">
               <label>
                 Nom du modèle
                 <input
@@ -406,55 +492,62 @@ function App() {
                   placeholder="Relance salon"
                 />
               </label>
-              <label>
-                Sujet
-                <input
-                  value={draft.subject}
-                  onChange={(event) => setDraft({ ...draft, subject: event.target.value })}
-                  placeholder="Bonjour {{prenom}}"
-                />
-              </label>
             </div>
-            <label>
-              Corps HTML
-              <textarea
-                className="body-editor"
-                value={draft.bodyHtml}
-                onChange={(event) => setDraft({ ...draft, bodyHtml: event.target.value })}
-              />
-            </label>
-            <label>
-              Version texte optionnelle
-              <textarea
-                className="plain-editor"
-                value={draft.bodyText}
-                onChange={(event) => setDraft({ ...draft, bodyText: event.target.value })}
-              />
-            </label>
-          </section>
 
+            <label>
+              Sujet
+              <input
+                value={draft.subject}
+                onChange={(event) => setDraft({ ...draft, subject: event.target.value })}
+                placeholder="Bonjour {{prenom}}"
+              />
+            </label>
+
+            <div className="field-group">
+              <span className="field-label">Corps HTML</span>
+              <RichHtmlEditor
+                value={draft.bodyHtml}
+                placeholders={placeholders}
+                onChange={(bodyHtml) => setDraft({ ...draft, bodyHtml, bodyText: "" })}
+              />
+            </div>
+
+            {placeholders.length ? (
+              <div className="field-strip">
+                {placeholders.map((placeholder) => (
+                  <code key={placeholder}>{placeholder}</code>
+                ))}
+              </div>
+            ) : (
+              <p className="muted">Importez un fichier Excel pour afficher les champs disponibles.</p>
+            )}
+          </section>
+        ) : null}
+
+        {activePanel === "excel" ? (
           <section className="panel">
             <div className="panel-heading">
               <div>
-                <h2>2. Fichier Excel</h2>
-                <p>La première ligne doit contenir les noms des colonnes. Les champs sont normalisés pour les modèles.</p>
+                <h2>Excel</h2>
+                <p>La première ligne doit contenir les noms de colonnes.</p>
               </div>
               <button type="button" className="primary" onClick={handlePickExcel} disabled={busy}>
                 Importer Excel
               </button>
             </div>
+
             {workbook ? (
               <>
-                <div className="import-meta">
+                <div className="status-row">
                   <span>{workbook.fileName}</span>
                   <span>{workbook.sheetName}</span>
                   <span>{workbook.totalRows} lignes</span>
                 </div>
                 <div className="field-strip">
                   {workbook.fields.map((field) => (
-                    <span key={field.key} title={field.header}>
+                    <code key={field.key} title={field.header}>
                       {`{{${field.key}}}`}
-                    </span>
+                    </code>
                   ))}
                 </div>
                 <div className="table-wrap">
@@ -468,7 +561,7 @@ function App() {
                       </tr>
                     </thead>
                     <tbody>
-                      {workbook.rows.slice(0, 6).map((row) => (
+                      {workbook.rows.slice(0, 8).map((row) => (
                         <tr key={row.rowNumber}>
                           <td>{row.rowNumber}</td>
                           {workbook.fields.slice(0, 6).map((field) => (
@@ -484,12 +577,14 @@ function App() {
               <p className="muted">Aucun fichier chargé.</p>
             )}
           </section>
+        ) : null}
 
+        {activePanel === "configuration" ? (
           <section className="panel">
             <div className="panel-heading">
               <div>
-                <h2>3. SMTP</h2>
-                <p>La configuration est locale. Le mot de passe est conservé par le trousseau du système.</p>
+                <h2>Configuration</h2>
+                <p>Réglez SMTP et la temporisation des campagnes.</p>
               </div>
               <div className="button-row">
                 <button type="button" className="ghost" onClick={handleSmtpTest} disabled={busy}>
@@ -500,163 +595,187 @@ function App() {
                 </button>
               </div>
             </div>
-            <div className="form-grid three">
-              <label>
-                Serveur
-                <input
-                  value={smtp.host}
-                  onChange={(event) => setSmtp({ ...smtp, host: event.target.value })}
-                  placeholder="smtp.exemple.fr"
-                />
-              </label>
-              <label>
-                Port
-                <input
-                  type="number"
-                  min="1"
-                  value={smtp.port}
-                  onChange={(event) => setSmtp({ ...smtp, port: Number(event.target.value) })}
-                />
-              </label>
-              <label>
-                Sécurité
-                <select
-                  value={smtp.security}
-                  onChange={(event) => setSmtp({ ...smtp, security: event.target.value as SmtpConfigInput["security"] })}
-                >
-                  <option value="startTls">STARTTLS</option>
-                  <option value="tls">TLS direct</option>
-                  <option value="none">Aucune</option>
-                </select>
-              </label>
-              <label>
-                Identifiant
-                <input
-                  value={smtp.username}
-                  onChange={(event) => setSmtp({ ...smtp, username: event.target.value })}
-                  placeholder="compte SMTP"
-                />
-              </label>
-              <label>
-                Mot de passe
-                <input
-                  type="password"
-                  value={smtp.password ?? ""}
-                  onChange={(event) => setSmtp({ ...smtp, password: event.target.value, clearPassword: false })}
-                  placeholder="laisser vide pour conserver"
-                />
-              </label>
-              <label>
-                Email expéditeur
-                <input
-                  value={smtp.fromEmail}
-                  onChange={(event) => setSmtp({ ...smtp, fromEmail: event.target.value })}
-                  placeholder="contact@exemple.fr"
-                />
-              </label>
-              <label>
-                Nom expéditeur
-                <input
-                  value={smtp.fromName}
-                  onChange={(event) => setSmtp({ ...smtp, fromName: event.target.value })}
-                  placeholder="Votre équipe"
-                />
-              </label>
-              <label>
-                Réponse à
-                <input
-                  value={smtp.replyTo ?? ""}
-                  onChange={(event) => setSmtp({ ...smtp, replyTo: event.target.value || null })}
-                  placeholder="optionnel"
-                />
-              </label>
-              <label>
-                Email de test
-                <input
-                  value={testEmail}
-                  onChange={(event) => setTestEmail(event.target.value)}
-                  placeholder="vous@exemple.fr"
-                />
-              </label>
-            </div>
-          </section>
 
-          <section className="panel">
-            <div className="panel-heading">
-              <div>
-                <h2>4. Rate limit</h2>
-                <p>Temporisez les campagnes pour respecter les quotas SMTP et éviter les rafales.</p>
+            <section className="settings-section">
+              <h3>SMTP</h3>
+              <div className="settings-grid smtp-settings">
+                <label className="span-two">
+                  Serveur
+                  <input
+                    value={smtp.host}
+                    onChange={(event) => setSmtp({ ...smtp, host: event.target.value })}
+                    placeholder="smtp.exemple.fr"
+                  />
+                </label>
+                <label>
+                  Port
+                  <input
+                    type="number"
+                    min="1"
+                    value={smtp.port}
+                    onChange={(event) => setSmtp({ ...smtp, port: Number(event.target.value) })}
+                  />
+                </label>
+                <label>
+                  Sécurité
+                  <select
+                    value={smtp.security}
+                    onChange={(event) => setSmtp({ ...smtp, security: event.target.value as SmtpConfigInput["security"] })}
+                  >
+                    <option value="startTls">STARTTLS</option>
+                    <option value="tls">TLS direct</option>
+                    <option value="none">Aucune</option>
+                  </select>
+                </label>
+                <label className="span-two">
+                  Identifiant
+                  <input
+                    value={smtp.username}
+                    onChange={(event) => setSmtp({ ...smtp, username: event.target.value })}
+                    placeholder="compte SMTP"
+                  />
+                </label>
+                <label className="span-two">
+                  Mot de passe
+                  <input
+                    type="password"
+                    value={smtp.password ?? ""}
+                    onChange={(event) => setSmtp({ ...smtp, password: event.target.value, clearPassword: false })}
+                    placeholder={smtpPasswordSaved ? "laisser vide pour conserver" : "optionnel à la sauvegarde"}
+                  />
+                  <span className={smtpPasswordSaved ? "field-hint success-text" : "field-hint"}>
+                    {smtpPasswordSaved
+                      ? "Mot de passe enregistré."
+                      : "Vous pourrez sauvegarder sans mot de passe, mais il sera requis pour tester ou envoyer."}
+                  </span>
+                </label>
+                <label>
+                  Email de test
+                  <input
+                    value={testEmail}
+                    onChange={(event) => setTestEmail(event.target.value)}
+                    placeholder="vous@exemple.fr"
+                  />
+                </label>
+                <label>
+                  Email expéditeur
+                  <input
+                    value={smtp.fromEmail}
+                    onChange={(event) => setSmtp({ ...smtp, fromEmail: event.target.value })}
+                    placeholder="contact@exemple.fr"
+                  />
+                </label>
+                <label>
+                  Nom expéditeur
+                  <input
+                    value={smtp.fromName}
+                    onChange={(event) => setSmtp({ ...smtp, fromName: event.target.value })}
+                    placeholder="Votre équipe"
+                  />
+                </label>
+                <label>
+                  Réponse à
+                  <input
+                    value={smtp.replyTo ?? ""}
+                    onChange={(event) => setSmtp({ ...smtp, replyTo: event.target.value || null })}
+                    placeholder="optionnel"
+                  />
+                </label>
               </div>
-            </div>
-            <div className="form-grid four">
-              <label>
-                Maximum par minute
-                <input
-                  value={rateLimit.maxPerMinute}
-                  onChange={(event) => setRateLimit({ ...rateLimit, maxPerMinute: event.target.value })}
-                  placeholder="30"
-                />
-              </label>
-              <label>
-                Pause minimale (ms)
-                <input
-                  value={rateLimit.minDelayMs}
-                  onChange={(event) => setRateLimit({ ...rateLimit, minDelayMs: event.target.value })}
-                  placeholder="1000"
-                />
-              </label>
-              <label>
-                Taille de lot
-                <input
-                  value={rateLimit.batchSize}
-                  onChange={(event) => setRateLimit({ ...rateLimit, batchSize: event.target.value })}
-                  placeholder="vide"
-                />
-              </label>
-              <label>
-                Pause entre lots (s)
-                <input
-                  value={rateLimit.batchPauseSeconds}
-                  onChange={(event) => setRateLimit({ ...rateLimit, batchPauseSeconds: event.target.value })}
-                  placeholder="vide"
-                />
-              </label>
-            </div>
-            <div className="rate-summary">
-              <span>{effectiveDelayMs} ms minimum entre deux emails</span>
-              <span>
-                {rateLimit.batchSize.trim()
-                  ? `Pause de ${rateLimit.batchPauseSeconds.trim() || "0"} s tous les ${rateLimit.batchSize.trim()} emails`
-                  : "Pas de pause par lot"}
-              </span>
-            </div>
-          </section>
+            </section>
 
+            <section className="settings-section">
+              <h3>Temporisation</h3>
+              <div className="settings-grid rate-settings">
+                <label>
+                  Maximum par minute
+                  <input
+                    value={rateLimit.maxPerMinute}
+                    onChange={(event) => setRateLimit({ ...rateLimit, maxPerMinute: event.target.value })}
+                    placeholder="30"
+                  />
+                </label>
+                <label>
+                  Pause minimale (ms)
+                  <input
+                    value={rateLimit.minDelayMs}
+                    onChange={(event) => setRateLimit({ ...rateLimit, minDelayMs: event.target.value })}
+                    placeholder="1000"
+                  />
+                </label>
+                <label>
+                  Taille de lot
+                  <input
+                    value={rateLimit.batchSize}
+                    onChange={(event) => setRateLimit({ ...rateLimit, batchSize: event.target.value })}
+                    placeholder="vide"
+                  />
+                </label>
+                <label>
+                  Pause entre lots (s)
+                  <input
+                    value={rateLimit.batchPauseSeconds}
+                    onChange={(event) => setRateLimit({ ...rateLimit, batchPauseSeconds: event.target.value })}
+                    placeholder="vide"
+                  />
+                </label>
+              </div>
+              <div className="status-row">
+                <span>{effectiveDelayMs} ms minimum entre deux emails</span>
+                <span>
+                  {rateLimit.batchSize.trim()
+                    ? `Pause de ${rateLimit.batchPauseSeconds.trim() || "0"} s tous les ${rateLimit.batchSize.trim()} emails`
+                    : "Pas de pause par lot"}
+                </span>
+              </div>
+            </section>
+          </section>
+        ) : null}
+
+        {activePanel === "send" ? (
           <section className="panel">
             <div className="panel-heading">
               <div>
-                <h2>5. Envoi</h2>
-                <p>Simulez d'abord, envoyez un test, puis lancez la campagne.</p>
+                <h2>Envoi</h2>
+                <p>Simulez, vérifiez, puis lancez la campagne.</p>
               </div>
               <div className="button-row">
-                <button type="button" className="ghost" onClick={handlePreview} disabled={busy || !sampleRow}>
+                <button type="button" className="ghost" onClick={handlePreview} disabled={busy || !workbook}>
                   Prévisualiser
                 </button>
-                <button type="button" className="ghost" onClick={handleDryRun} disabled={busy}>
-                  Simuler
-                </button>
-                <button type="button" className="ghost" onClick={handleSendTestCampaign} disabled={busy}>
-                  Test campagne
-                </button>
-                <button type="button" className="danger" onClick={handleSendCampaign} disabled={busy}>
+                <button
+                  type="button"
+                  className="danger"
+                  onClick={requestSendCampaign}
+                  disabled={busy || sending}
+                >
                   Envoyer
                 </button>
+                {sending ? (
+                  <button type="button" className="ghost" onClick={handleCancelCampaign}>
+                    Annuler l'envoi
+                  </button>
+                ) : null}
               </div>
             </div>
-            <div className="form-grid three">
+
+            <div className="status-row">
+              <span>{selectedTemplate ? selectedTemplate.name : "Modèle non sauvegardé"}</span>
+              <span>{workbook ? workbook.fileName : "Aucun Excel"}</span>
+              <span>{smtp.host || "SMTP non configuré"}</span>
+            </div>
+
+            <div className="form-grid two">
               <label>
                 Champ email
-                <select value={recipientField} onChange={(event) => setRecipientField(event.target.value)}>
+                <select
+                  value={recipientField}
+                  onChange={(event) => {
+                    setRecipientField(event.target.value);
+                    setPreviewSamples([]);
+                    setPreviewIndex(0);
+                  }}
+                >
                   {(workbook?.fields ?? []).map((field) => (
                     <option key={field.key} value={field.key}>
                       {field.header} ({field.key})
@@ -669,6 +788,40 @@ function App() {
                 <input value={sendLimit} onChange={(event) => setSendLimit(event.target.value)} placeholder="vide" />
               </label>
             </div>
+
+            {sending && progress ? (
+              <div className="progress-card">
+                <div className="progress-head">
+                  <strong>
+                    {progress.attempted} / {progress.total}
+                  </strong>
+                  <span>{progress.sent} envoyés</span>
+                  <span>{progress.skipped} ignorés</span>
+                  <span>{progress.failed} erreurs</span>
+                  {progress.currentRecipient ? (
+                    <span className="progress-current">→ {progress.currentRecipient}</span>
+                  ) : null}
+                </div>
+                <div
+                  className="progress-bar"
+                  role="progressbar"
+                  aria-valuemin={0}
+                  aria-valuemax={progress.total || 1}
+                  aria-valuenow={progress.attempted}
+                >
+                  <div
+                    className="progress-fill"
+                    style={{
+                      width: `${progress.total ? Math.min(100, (progress.attempted / progress.total) * 100) : 0}%`,
+                    }}
+                  />
+                </div>
+                {progress.lastError ? (
+                  <p className="progress-error">Dernière erreur : {progress.lastError}</p>
+                ) : null}
+              </div>
+            ) : null}
+
             {summary ? (
               <div className="summary">
                 <strong>{summary.attempted} traités</strong>
@@ -677,6 +830,7 @@ function App() {
                 <span>{summary.failed.length} erreurs</span>
               </div>
             ) : null}
+
             {summary?.failed.length ? (
               <div className="failure-list">
                 {summary.failed.slice(0, 8).map((failure) => (
@@ -686,35 +840,80 @@ function App() {
                 ))}
               </div>
             ) : null}
-          </section>
-        </section>
 
-        <aside className="inspector">
-          <section className="panel slim">
-            <h2>Champs</h2>
-            {placeholders.length ? (
-              <div className="placeholder-list">
-                {placeholders.map((placeholder) => (
-                  <code key={placeholder}>{placeholder}</code>
-                ))}
-              </div>
-            ) : (
-              <p className="muted">Importez Excel pour voir les champs.</p>
-            )}
-          </section>
-          <section className="panel slim">
-            <h2>Prévisualisation</h2>
-            {preview ? (
-              <>
-                <p className="preview-subject">{preview.subject}</p>
-                <div className="preview-box" dangerouslySetInnerHTML={{ __html: preview.bodyHtml }} />
-              </>
+            {currentPreview ? (
+              <section className="preview-area">
+                <div className="preview-heading">
+                  <div>
+                    <h3>Prévisualisation</h3>
+                    {currentPreviewSample ? (
+                      <p className="preview-meta">
+                        Ligne {currentPreviewSample.rowNumber}
+                        {currentPreviewSample.recipient ? ` - ${currentPreviewSample.recipient}` : ""}
+                      </p>
+                    ) : null}
+                  </div>
+                  {previewSamples.length > 1 ? (
+                    <div className="preview-nav">
+                      <button
+                        type="button"
+                        className="ghost compact"
+                        onClick={() => setPreviewIndex((index) => Math.max(0, index - 1))}
+                        disabled={previewIndex === 0}
+                      >
+                        Précédent
+                      </button>
+                      <span>
+                        {previewIndex + 1} / {previewSamples.length}
+                      </span>
+                      <button
+                        type="button"
+                        className="ghost compact"
+                        onClick={() => setPreviewIndex((index) => Math.min(previewSamples.length - 1, index + 1))}
+                        disabled={previewIndex >= previewSamples.length - 1}
+                      >
+                        Suivant
+                      </button>
+                    </div>
+                  ) : null}
+                </div>
+                <p className="preview-subject">{currentPreview.subject}</p>
+                <div className="preview-box" dangerouslySetInnerHTML={{ __html: safePreviewHtml }} />
+              </section>
             ) : (
               <p className="muted">Aucune prévisualisation.</p>
             )}
           </section>
-        </aside>
+        ) : null}
+
+        {activePanel === "about" ? (
+          <section className="panel">
+            <div className="panel-heading">
+              <div>
+                <h2>À propos</h2>
+                <p>Application bureau locale pour publipostage email.</p>
+              </div>
+              <button className="primary" type="button" onClick={handleUpdate} disabled={busy}>
+                Vérifier les mises à jour
+              </button>
+            </div>
+            <div className="about-list">
+              <p><strong>Version</strong><span>0.1.0</span></p>
+            </div>
+          </section>
+        ) : null}
       </section>
+
+      <ConfirmDialog
+        open={confirmSend}
+        title="Lancer la campagne ?"
+        message={`${workbook?.totalRows ?? 0} ligne(s) seront traitées via ${smtp.host || "le SMTP configuré"}. Cette action enverra de vrais emails.`}
+        confirmLabel="Envoyer maintenant"
+        cancelLabel="Revenir"
+        tone="danger"
+        onConfirm={handleSendCampaign}
+        onCancel={() => setConfirmSend(false)}
+      />
     </main>
   );
 }

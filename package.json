@@ -1,5 +1,5 @@
 {
-  "name": "artois-mailer",
+  "name": "mailer",
   "private": true,
   "version": "0.1.0",
   "type": "module",
@@ -9,10 +9,13 @@
     "preview": "vite preview",
     "tauri": "tauri",
     "desktop:dev": "tauri dev",
-    "desktop:build": "tauri build"
+    "desktop:build": "tauri build",
+    "release:prepare": "node scripts/inject-release-pubkey.mjs",
+    "desktop:release": "node scripts/inject-release-pubkey.mjs && tauri build --config src-tauri/tauri.release.conf.json"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.0.0",
+    "dompurify": "^3.2.4",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
   },
@@ -25,4 +28,3 @@
     "vite": "^5.4.8"
   }
 }
-

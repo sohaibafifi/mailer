@@ -12,3 +12,4 @@ target/
 src-tauri/gen/
 src-tauri/target/
 
+docs/ARCHITECTURE.md

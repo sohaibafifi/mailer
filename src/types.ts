@@ -60,6 +60,11 @@ export type RenderedPreview = {
   bodyText: string;
 };
 
+export type PreviewSample = RenderedPreview & {
+  rowNumber: number;
+  recipient: string | null;
+};
+
 export type RateLimitConfig = {
   maxPerMinute: number | null;
   minDelayMs: number | null;
@@ -96,4 +101,16 @@ export type UpdateCheckResult = {
   status: "upToDate" | "installed";
   version: string | null;
   message: string;
+};
+
+export type CampaignProgress = {
+  status: "running" | "done" | "cancelled";
+  total: number;
+  attempted: number;
+  sent: number;
+  skipped: number;
+  failed: number;
+  currentRow: number | null;
+  currentRecipient: string | null;
+  lastError: string | null;
 };

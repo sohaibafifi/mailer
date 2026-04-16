@@ -4,14 +4,15 @@ use std::{
     collections::{BTreeMap, HashSet},
     fs,
     path::PathBuf,
+    sync::atomic::{AtomicBool, Ordering},
     thread,
-    time::Duration,
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use calamine::{open_workbook_auto, Data, Reader};
 use chrono::Utc;
 use deunicode::deunicode;
-use handlebars::Handlebars;
+use handlebars::{no_escape, Handlebars};
 use keyring::Entry;
 use lettre::{
     message::{header, Mailbox, MultiPart, SinglePart},
@@ -19,13 +20,16 @@ use lettre::{
     Message, SmtpTransport, Transport,
 };
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_updater::UpdaterExt;
 use uuid::Uuid;
 
+static CAMPAIGN_CANCEL: AtomicBool = AtomicBool::new(false);
+const PROGRESS_EVENT: &str = "campaign:progress";
+
 const TEMPLATES_FILE: &str = "templates.json";
 const SMTP_FILE: &str = "smtp.json";
-const KEYRING_SERVICE: &str = "com.vp.artois-mailer";
+const KEYRING_SERVICE: &str = "fr.univ-artois.mailer";
 const KEYRING_ACCOUNT: &str = "smtp-password";
 const MAX_FAILURES: usize = 100;
 
@@ -169,6 +173,16 @@ struct RenderedPreview {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
+struct PreviewSample {
+    row_number: usize,
+    recipient: Option<String>,
+    subject: String,
+    body_html: String,
+    body_text: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct RowFailure {
     row_number: usize,
     recipient: Option<String>,
@@ -193,6 +207,20 @@ struct UpdateCheckResult {
     message: String,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CampaignProgress {
+    status: &'static str,
+    total: usize,
+    attempted: usize,
+    sent: usize,
+    skipped: usize,
+    failed: usize,
+    current_row: Option<usize>,
+    current_recipient: Option<String>,
+    last_error: Option<String>,
+}
+
 #[tauri::command]
 fn load_templates(app: AppHandle) -> Result<Vec<MailingTemplate>, String> {
     load_templates_inner(&app)
@@ -212,7 +240,7 @@ fn save_template(app: AppHandle, input: TemplateInput) -> Result<Vec<MailingTemp
             existing.subject = input.subject.trim().to_string();
             existing.body_html = input.body_html.trim().to_string();
             existing.body_text = input.body_text.trim().to_string();
-            existing.updated_at = now;
+            existing.updated_at = now.clone();
             saved_id = existing.id.clone();
         }
     }
@@ -295,14 +323,14 @@ async fn send_smtp_test(input: SmtpConfigInput, email: String) -> Result<String,
         let config = normalize_smtp_input(&input)?;
         let password = resolve_password(input.password)?;
         let mailer = build_transport(&config, password.as_deref())?;
-        let html = "<p>La configuration SMTP ArtoisMailer est opérationnelle.</p>";
+        let html = "<p>La configuration SMTP Mailer est opérationnelle.</p>";
         send_email(
             &mailer,
             &config,
             email.trim(),
-            "Test ArtoisMailer",
+            "Test Mailer",
             html,
-            "La configuration SMTP ArtoisMailer est opérationnelle.",
+            "La configuration SMTP Mailer est opérationnelle.",
         )?;
         Ok("Email de test envoyé.".to_string())
     })
@@ -328,7 +356,53 @@ fn preview_template(
     row: BTreeMap<String, String>,
 ) -> Result<RenderedPreview, String> {
     validate_template(&input)?;
-    render_template_parts(&input.subject, &input.body_html, &input.body_text, &row)
+    render_template_parts(&input.subject, &input.body_html, &row)
+}
+
+#[tauri::command]
+fn preview_template_samples(
+    input: TemplateInput,
+    excel_path: String,
+    sheet_name: Option<String>,
+    recipient_field: Option<String>,
+    count: usize,
+) -> Result<Vec<PreviewSample>, String> {
+    validate_template(&input)?;
+    let workbook = read_workbook_data(PathBuf::from(excel_path), sheet_name)?;
+    if workbook.rows.is_empty() {
+        return Err("Aucune ligne exploitable dans le fichier Excel.".to_string());
+    }
+
+    let recipient_key = recipient_field.as_deref().and_then(trimmed_optional);
+    if let Some(field) = recipient_key.as_deref() {
+        if !workbook
+            .fields
+            .iter()
+            .any(|candidate| candidate.key == field)
+        {
+            return Err("Le champ email sélectionné n'existe pas dans ce fichier.".to_string());
+        }
+    }
+
+    random_sample_rows(&workbook.rows, count.clamp(1, 50))
+        .into_iter()
+        .map(|row| {
+            let rendered = render_template_parts(&input.subject, &input.body_html, &row.values)?;
+            let recipient = recipient_key
+                .as_deref()
+                .and_then(|field| row.values.get(field))
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty());
+
+            Ok(PreviewSample {
+                row_number: row.row_number,
+                recipient,
+                subject: rendered.subject,
+                body_html: rendered.body_html,
+                body_text: rendered.body_text,
+            })
+        })
+        .collect()
 }
 
 #[tauri::command]
@@ -336,9 +410,15 @@ async fn send_campaign(
     app: AppHandle,
     request: SendCampaignRequest,
 ) -> Result<SendSummary, String> {
+    CAMPAIGN_CANCEL.store(false, Ordering::SeqCst);
     tauri::async_runtime::spawn_blocking(move || send_campaign_inner(app, request))
         .await
         .map_err(|error| format!("Tâche d'envoi interrompue: {error}"))?
+}
+
+#[tauri::command]
+fn cancel_campaign() {
+    CAMPAIGN_CANCEL.store(true, Ordering::SeqCst);
 }
 
 #[tauri::command]
@@ -351,16 +431,14 @@ async fn download_and_install_update(app: AppHandle) -> Result<UpdateCheckResult
         .map_err(|error| format!("Impossible de vérifier les mises à jour: {error}"))?;
 
     if let Some(update) = update {
-        let version = update.version.clone();
         update
             .download_and_install(|_, _| {}, || {})
             .await
             .map_err(|error| format!("Mise à jour téléchargée mais non installée: {error}"))?;
-        app.restart();
         Ok(UpdateCheckResult {
             status: "installed".to_string(),
-            version: Some(version),
-            message: "Mise à jour installée. Redémarrage en cours.".to_string(),
+            version: Some(update.version),
+            message: "Mise à jour installée. Redémarrez l'application pour finaliser.".to_string(),
         })
     } else {
         Ok(UpdateCheckResult {
@@ -403,6 +481,8 @@ fn send_campaign_inner(
         return Err("Aucune ligne exploitable dans le fichier Excel.".to_string());
     }
 
+    let rate_limit = normalize_rate_limit(&request.rate_limit)?;
+
     if request.dry_run {
         return simulate_campaign(template, &rows, &request.recipient_field);
     }
@@ -420,7 +500,6 @@ fn send_campaign_inner(
     };
     let password = resolve_password(None)?;
     let mailer = build_transport(&stored_config, password.as_deref())?;
-    let rate_limit = normalize_rate_limit(&request.rate_limit)?;
 
     if let Some(test_email) = request
         .test_email
@@ -431,12 +510,7 @@ fn send_campaign_inner(
         let row = rows
             .first()
             .ok_or_else(|| "Aucune ligne disponible pour l'email de test.".to_string())?;
-        let rendered = render_template_parts(
-            &template.subject,
-            &template.body_html,
-            &template.body_text,
-            &row.values,
-        )?;
+        let rendered = render_template_parts(&template.subject, &template.body_html, &row.values)?;
         send_email(
             &mailer,
             &stored_config,
@@ -454,6 +528,7 @@ fn send_campaign_inner(
         });
     }
 
+    let total = rows.len();
     let mut summary = SendSummary {
         attempted: 0,
         sent: 0,
@@ -463,7 +538,14 @@ fn send_campaign_inner(
     };
     let mut delivery_attempts = 0;
 
+    emit_progress(&app, "running", total, &summary, None, None, None);
+
     for row in rows {
+        if CAMPAIGN_CANCEL.load(Ordering::Relaxed) {
+            emit_progress(&app, "cancelled", total, &summary, None, None, None);
+            return Ok(summary);
+        }
+
         summary.attempted += 1;
         let recipient = row
             .values
@@ -473,50 +555,126 @@ fn send_campaign_inner(
 
         if recipient.is_empty() {
             summary.skipped += 1;
+            emit_progress(
+                &app,
+                "running",
+                total,
+                &summary,
+                Some(row.row_number),
+                None,
+                None,
+            );
             continue;
         }
         delivery_attempts += 1;
-
-        match render_template_parts(
-            &template.subject,
-            &template.body_html,
-            &template.body_text,
-            &row.values,
-        )
-        .and_then(|rendered| {
-            if summary.preview.is_none() {
-                summary.preview = Some(rendered.clone());
-            }
-            send_email(
-                &mailer,
-                &stored_config,
-                &recipient,
-                &rendered.subject,
-                &rendered.body_html,
-                &rendered.body_text,
-            )
-        }) {
-            Ok(()) => summary.sent += 1,
-            Err(message) => push_failure(
-                &mut summary.failed,
-                RowFailure {
-                    row_number: row.row_number,
-                    recipient: Some(recipient),
-                    message,
-                },
-            ),
+        wait_before_delivery_interruptible(&rate_limit, delivery_attempts);
+        if CAMPAIGN_CANCEL.load(Ordering::Relaxed) {
+            emit_progress(&app, "cancelled", total, &summary, None, None, None);
+            return Ok(summary);
         }
 
-        apply_rate_limit(&rate_limit, delivery_attempts);
+        let outcome = render_template_parts(&template.subject, &template.body_html, &row.values)
+            .and_then(|rendered| {
+                if summary.preview.is_none() {
+                    summary.preview = Some(rendered.clone());
+                }
+                send_email(
+                    &mailer,
+                    &stored_config,
+                    &recipient,
+                    &rendered.subject,
+                    &rendered.body_html,
+                    &rendered.body_text,
+                )
+            });
+
+        let mut last_error: Option<String> = None;
+        match outcome {
+            Ok(()) => summary.sent += 1,
+            Err(message) => {
+                last_error = Some(message.clone());
+                push_failure(
+                    &mut summary.failed,
+                    RowFailure {
+                        row_number: row.row_number,
+                        recipient: Some(recipient.clone()),
+                        message,
+                    },
+                );
+            }
+        }
+
+        emit_progress(
+            &app,
+            "running",
+            total,
+            &summary,
+            Some(row.row_number),
+            Some(recipient),
+            last_error,
+        );
     }
 
+    emit_progress(&app, "done", total, &summary, None, None, None);
     Ok(summary)
+}
+
+fn emit_progress(
+    app: &AppHandle,
+    status: &'static str,
+    total: usize,
+    summary: &SendSummary,
+    current_row: Option<usize>,
+    current_recipient: Option<String>,
+    last_error: Option<String>,
+) {
+    let payload = CampaignProgress {
+        status,
+        total,
+        attempted: summary.attempted,
+        sent: summary.sent,
+        skipped: summary.skipped,
+        failed: summary.failed.len(),
+        current_row,
+        current_recipient,
+        last_error,
+    };
+    let _ = app.emit(PROGRESS_EVENT, payload);
+}
+
+fn wait_before_delivery_interruptible(rate_limit: &RateLimitRuntime, next_attempt: usize) {
+    if next_attempt <= 1 {
+        return;
+    }
+    let previous_attempts = next_attempt - 1;
+    let mut pause = rate_limit.per_email_delay;
+    if let Some(batch_size) = rate_limit.batch_size {
+        if previous_attempts % batch_size == 0 {
+            pause = pause.max(rate_limit.batch_pause);
+        }
+    }
+    if pause.is_zero() {
+        return;
+    }
+
+    let step = Duration::from_millis(100);
+    let mut remaining = pause;
+    while !remaining.is_zero() {
+        if CAMPAIGN_CANCEL.load(Ordering::Relaxed) {
+            return;
+        }
+        let slice = remaining.min(step);
+        thread::sleep(slice);
+        remaining = remaining.saturating_sub(slice);
+    }
 }
 
 fn normalize_rate_limit(config: &RateLimitConfig) -> Result<RateLimitRuntime, String> {
     let max_per_minute_delay = match config.max_per_minute {
         Some(0) => return Err("Le maximum par minute doit être supérieur à 0.".to_string()),
-        Some(value) if value > 600 => return Err("Le maximum par minute ne peut pas dépasser 600.".to_string()),
+        Some(value) if value > 600 => {
+            return Err("Le maximum par minute ne peut pas dépasser 600.".to_string())
+        }
         Some(value) => 60_000_u64.div_ceil(value),
         None => 0,
     };
@@ -544,21 +702,28 @@ fn normalize_rate_limit(config: &RateLimitConfig) -> Result<RateLimitRuntime, St
     })
 }
 
-fn apply_rate_limit(rate_limit: &RateLimitRuntime, delivery_attempts: usize) {
-    if delivery_attempts == 0 {
-        return;
+fn random_sample_rows(rows: &[RecipientRow], count: usize) -> Vec<RecipientRow> {
+    let mut selected = rows.to_vec();
+    if selected.len() <= 1 {
+        selected.truncate(count.min(selected.len()));
+        return selected;
     }
 
-    if let Some(batch_size) = rate_limit.batch_size {
-        if !rate_limit.batch_pause.is_zero() && delivery_attempts % batch_size == 0 {
-            thread::sleep(rate_limit.batch_pause);
-            return;
-        }
+    let mut seed = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos() as u64)
+        .unwrap_or(0x9e37_79b9_7f4a_7c15);
+
+    for index in (1..selected.len()).rev() {
+        seed ^= seed << 13;
+        seed ^= seed >> 7;
+        seed ^= seed << 17;
+        let swap_index = (seed as usize) % (index + 1);
+        selected.swap(index, swap_index);
     }
 
-    if !rate_limit.per_email_delay.is_zero() {
-        thread::sleep(rate_limit.per_email_delay);
-    }
+    selected.truncate(count.min(selected.len()));
+    selected
 }
 
 fn simulate_campaign(
@@ -586,12 +751,7 @@ fn simulate_campaign(
             continue;
         }
 
-        match render_template_parts(
-            &template.subject,
-            &template.body_html,
-            &template.body_text,
-            &row.values,
-        ) {
+        match render_template_parts(&template.subject, &template.body_html, &row.values) {
             Ok(rendered) => {
                 if summary.preview.is_none() {
                     summary.preview = Some(rendered);
@@ -628,8 +788,8 @@ fn validate_template(input: &TemplateInput) -> Result<(), String> {
     if input.subject.trim().is_empty() {
         return Err("Le sujet ne peut pas être vide.".to_string());
     }
-    if input.body_html.trim().is_empty() && input.body_text.trim().is_empty() {
-        return Err("Le modèle doit contenir au moins une version HTML ou texte.".to_string());
+    if input.body_html.trim().is_empty() {
+        return Err("Le modèle doit contenir un corps HTML.".to_string());
     }
     Ok(())
 }
@@ -685,7 +845,10 @@ fn build_transport(
     builder = builder.port(config.port);
     if !config.username.trim().is_empty() {
         let Some(password) = password.filter(|value| !value.trim().is_empty()) else {
-            return Err("Mot de passe SMTP absent.".to_string());
+            return Err(
+                "Mot de passe SMTP absent. Saisissez-le puis sauvegardez la configuration."
+                    .to_string(),
+            );
         };
         builder = builder.credentials(Credentials::new(
             config.username.clone(),
@@ -753,22 +916,41 @@ fn send_email(
 fn render_template_parts(
     subject: &str,
     body_html: &str,
-    body_text: &str,
     row: &BTreeMap<String, String>,
 ) -> Result<RenderedPreview, String> {
+    let rendered_html = render_html_template(body_html, row)?;
+    let rendered_subject = sanitize_header_value(&render_text_template(subject, row)?);
     Ok(RenderedPreview {
-        subject: render_template(subject, row)?,
-        body_html: render_template(body_html, row)?,
-        body_text: render_template(body_text, row)?,
+        subject: rendered_subject,
+        body_html: rendered_html.clone(),
+        body_text: strip_html(&rendered_html),
     })
 }
 
-fn render_template(source: &str, row: &BTreeMap<String, String>) -> Result<String, String> {
+fn render_html_template(source: &str, row: &BTreeMap<String, String>) -> Result<String, String> {
     let mut handlebars = Handlebars::new();
     handlebars.set_strict_mode(true);
     handlebars
         .render_template(source, row)
         .map_err(|error| format!("Champ de modèle invalide: {error}"))
+}
+
+fn render_text_template(source: &str, row: &BTreeMap<String, String>) -> Result<String, String> {
+    let mut handlebars = Handlebars::new();
+    handlebars.set_strict_mode(true);
+    handlebars.register_escape_fn(no_escape);
+    handlebars
+        .render_template(source, row)
+        .map_err(|error| format!("Champ de modèle invalide: {error}"))
+}
+
+fn sanitize_header_value(value: &str) -> String {
+    value
+        .chars()
+        .filter(|character| *character != '\r' && *character != '\n')
+        .collect::<String>()
+        .trim()
+        .to_string()
 }
 
 fn read_workbook_preview(
@@ -1077,7 +1259,9 @@ fn main() {
             send_smtp_test,
             pick_excel_file,
             preview_template,
+            preview_template_samples,
             send_campaign,
+            cancel_campaign,
             download_and_install_update
         ])
         .run(tauri::generate_context!())

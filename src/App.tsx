@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { getVersion } from "@tauri-apps/api/app";
 import {
   cancelCampaign,
   deleteTemplate,
@@ -123,6 +124,11 @@ function App() {
   const [progress, setProgress] = useState<CampaignProgress | null>(null);
   const [sending, setSending] = useState(false);
   const [confirmSend, setConfirmSend] = useState(false);
+  const [appVersion, setAppVersion] = useState("");
+
+  useEffect(() => {
+    getVersion().then(setAppVersion).catch(() => setAppVersion(""));
+  }, []);
 
   const selectedTemplate = useMemo(
     () => templates.find((template) => template.id === draft.id) ?? null,
@@ -898,7 +904,7 @@ function App() {
               </button>
             </div>
             <div className="about-list">
-              <p><strong>Version</strong><span>0.1.0</span></p>
+              <p><strong>Version</strong><span>{appVersion || "…"}</span></p>
             </div>
           </section>
         ) : null}

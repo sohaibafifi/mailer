@@ -64,25 +64,30 @@ npm run desktop:release
 
    Produit `~/.tauri/mailer.key` (privée) et `~/.tauri/mailer.key.pub` (publique).
 
-2. Copier le template `.env` et y coller la **clé publique** (base64 du fichier `.pub` complet, sur une seule ligne):
+2. Enregistrer la **clé publique**. Avec le script de release actuel, le plus simple est d'utiliser directement le fichier `.pub`:
+
+   ```bash
+   gh secret set TAURI_UPDATER_PUBKEY < ~/.tauri/mailer.key.pub
+   ```
+
+   Pour un build local signé, copier aussi le template `.env` et coller le contenu de `~/.tauri/mailer.key.pub` après `TAURI_UPDATER_PUBKEY=`:
 
    ```bash
    cp src-tauri/.env.example src-tauri/.env
-   # macOS
-   base64 -i ~/.tauri/mailer.key.pub | tr -d '\n' | pbcopy
-   # Linux
-   base64 -w0 ~/.tauri/mailer.key.pub | xclip -selection clipboard
-   # puis coller la valeur dans src-tauri/.env après TAURI_UPDATER_PUBKEY=
+   cat ~/.tauri/mailer.key.pub
    ```
 
-   `src-tauri/.env` est ignoré par git. La clé publique n'est jamais commitée: elle est injectée dans `tauri.release.conf.json` au moment du build par `scripts/inject-release-pubkey.mjs`. Une pubkey valide commence par `dW50cnVzdGVk` (c'est `untrusted` en base64).
+   `src-tauri/.env` est ignoré par git. La clé publique n'est jamais commitée: elle est normalisée puis injectée dans `tauri.release.conf.json` au moment du build par `scripts/inject-release-pubkey.mjs`.
 
 3. Remplacer `OWNER` dans l'endpoint `src-tauri/tauri.release.conf.json` par le propriétaire GitHub réel (déjà fait si le repo est configuré).
 
 4. Ajouter les secrets GitHub Actions (Settings → Secrets and variables → Actions):
 
-   - `TAURI_UPDATER_PUBKEY`: même valeur que dans `src-tauri/.env` (base64 du `.pub` complet, une ligne, commence par `dW50cnVzdGVk`)
-   - `TAURI_SIGNING_PRIVATE_KEY`: **base64 du fichier de clé privée complet** (pas son contenu brut). Générer avec:
+   - `TAURI_UPDATER_PUBKEY`: contenu de `~/.tauri/mailer.key.pub` (`gh secret set TAURI_UPDATER_PUBKEY < ~/.tauri/mailer.key.pub`)
+   - `TAURI_SIGNING_PRIVATE_KEY`: contenu de `~/.tauri/mailer.key` (`gh secret set TAURI_SIGNING_PRIVATE_KEY < ~/.tauri/mailer.key`)
+   - `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`: mot de passe utilisé à la génération, si un mot de passe a été défini
+
+   Si vous préférez stocker les clés en base64, c'est aussi accepté par le script d'injection pour la clé publique. Générer avec:
 
      ```bash
      # macOS (base64 coupe à 76 colonnes par défaut, on retire les \n)
@@ -91,10 +96,7 @@ npm run desktop:release
      base64 -w0 ~/.tauri/mailer.key | xclip -selection clipboard
      ```
 
-     Coller la valeur dans le secret. Pièges à éviter :
-     - contenu brut du fichier (avec `untrusted comment:...`) → `Invalid symbol 61`
-     - base64 avec retours à la ligne → `Invalid symbol 10, offset 76`
-   - `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`: mot de passe utilisé à la génération (vide si aucun)
+     Coller la valeur dans le secret.
 
 ### Publier une version
 

@@ -208,6 +208,10 @@ th {
   white-space: nowrap;
 }
 
+.tab-right-start {
+  margin-left: auto;
+}
+
 .tab.active {
   background: #0d7c55;
   color: #ffffff;
@@ -443,6 +447,27 @@ th {
   text-transform: uppercase;
 }
 
+.rich-color-group {
+  align-items: center;
+  display: inline-flex;
+  gap: 5px;
+}
+
+.rich-color-button {
+  border: 1px solid rgba(23, 27, 25, 0.22);
+  border-radius: 6px;
+  min-height: 28px;
+  min-width: 28px;
+  padding: 0;
+}
+
+.rich-color-button:hover:not(:disabled),
+.rich-color-button.active {
+  box-shadow:
+    0 0 0 2px #ffffff,
+    0 0 0 4px #0d7c55;
+}
+
 .rich-sep {
   background: #dfe5df;
   height: 20px;
@@ -507,9 +532,12 @@ th {
   padding: 14px;
 }
 
-.rich-surface:empty::before {
+.rich-surface p.is-editor-empty:first-child::before {
   color: #7b857d;
   content: "Rédigez votre email...";
+  float: left;
+  height: 0;
+  pointer-events: none;
 }
 
 .rich-surface a {
@@ -526,6 +554,49 @@ th {
 .rich-surface ol {
   margin: 0 0 10px 20px;
   padding: 0;
+}
+
+.rich-surface table {
+  border-collapse: collapse;
+  margin: 0 0 12px;
+  table-layout: fixed;
+  width: 100%;
+}
+
+.rich-surface th,
+.rich-surface td {
+  border: 1px solid #d4ddd5;
+  max-width: none;
+  min-width: 80px;
+  overflow: visible;
+  padding: 8px;
+  text-overflow: clip;
+  vertical-align: top;
+  white-space: normal;
+}
+
+.rich-surface th {
+  background: #f2f6f3;
+  color: #2f3a33;
+  font-size: 0.88rem;
+  text-transform: none;
+}
+
+.rich-surface .selectedCell {
+  position: relative;
+}
+
+.rich-surface .selectedCell::after {
+  background: rgba(13, 124, 85, 0.12);
+  content: "";
+  inset: 0;
+  pointer-events: none;
+  position: absolute;
+  z-index: 2;
+}
+
+.rich-loading {
+  color: #6f7a73;
 }
 
 .table-wrap {

@@ -62,8 +62,8 @@ type PanelId = "templates" | "excel" | "configuration" | "send" | "about";
 const panels: Array<{ id: PanelId; label: string }> = [
   { id: "templates", label: "Modèles" },
   { id: "excel", label: "Excel" },
-  { id: "configuration", label: "Configuration" },
   { id: "send", label: "Envoi" },
+  { id: "configuration", label: "Configuration" },
   { id: "about", label: "À propos" },
 ];
 
@@ -439,7 +439,13 @@ function App() {
           <button
             key={panel.id}
             type="button"
-            className={activePanel === panel.id ? "tab active" : "tab"}
+            className={[
+              "tab",
+              panel.id === "configuration" ? "tab-right-start" : "",
+              activePanel === panel.id ? "active" : "",
+            ]
+              .filter(Boolean)
+              .join(" ")}
             onClick={() => setActivePanel(panel.id)}
           >
             {panel.label}

@@ -12,7 +12,7 @@ use std::{
 use calamine::{open_workbook_auto, Data, Reader};
 use chrono::Utc;
 use deunicode::deunicode;
-use handlebars::{no_escape, Handlebars};
+use handlebars::{no_escape, Handlebars, RenderError, RenderErrorReason};
 use keyring::Entry;
 use lettre::{
     message::{header, Mailbox, MultiPart, SinglePart},
@@ -932,7 +932,7 @@ fn render_html_template(source: &str, row: &BTreeMap<String, String>) -> Result<
     handlebars.set_strict_mode(true);
     handlebars
         .render_template(source, row)
-        .map_err(|error| format!("Champ de modèle invalide: {error}"))
+        .map_err(format_template_error)
 }
 
 fn render_text_template(source: &str, row: &BTreeMap<String, String>) -> Result<String, String> {
@@ -941,7 +941,26 @@ fn render_text_template(source: &str, row: &BTreeMap<String, String>) -> Result<
     handlebars.register_escape_fn(no_escape);
     handlebars
         .render_template(source, row)
-        .map_err(|error| format!("Champ de modèle invalide: {error}"))
+        .map_err(format_template_error)
+}
+
+fn format_template_error(error: RenderError) -> String {
+    match error.reason() {
+        RenderErrorReason::MissingVariable(Some(field)) => {
+            format!("Champ inconnu: {{{{{field}}}}}. Vérifiez le nom du champ dans le fichier Excel.")
+        }
+        RenderErrorReason::MissingVariable(None) => {
+            "Champ inconnu dans le modèle. Vérifiez les champs entre {{ }}.".to_string()
+        }
+        RenderErrorReason::TemplateError(_) => {
+            "Syntaxe du modèle invalide. Vérifiez les accolades {{ }}.".to_string()
+        }
+        RenderErrorReason::HelperNotFound(_) => {
+            "Expression de modèle invalide. Utilisez uniquement des champs comme {{prenom}}."
+                .to_string()
+        }
+        _ => "Modèle invalide. Vérifiez les champs entre {{ }}.".to_string(),
+    }
 }
 
 fn sanitize_header_value(value: &str) -> String {

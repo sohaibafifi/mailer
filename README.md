@@ -9,6 +9,8 @@ Application bureau pour le publipostage email, avec:
 - un envoi avec progression live, annulation et confirmation;
 - des mises à jour signées distribuées via GitHub Releases.
 
+![Capture d'écran de Mailer](screenshot.png)
+
 
 
 ## Développement

@@ -47,10 +47,10 @@ npm run desktop:release
 
 ## Utilisation
 
-1. **Modèles** — créer un modèle avec sujet et corps HTML. L'éditeur propose gras / italique / souligné, listes, insertion de lien (http/https/mailto uniquement), et un mode source HTML.
-2. **Données** — importer le fichier Excel. La première ligne sert d'en-têtes; les colonnes deviennent des placeholders Handlebars (`{{prenom}}`, `{{societe}}`, ...).
-3. **Configuration** — renseigner SMTP (serveur, port, sécurité, identifiant, expéditeur). Le mot de passe est écrit dans le trousseau système (macOS Keychain, Windows Credential Manager, Linux Secret Service) et jamais dans le JSON local. Régler la temporisation: maximum par minute, pause minimale, taille de lot et pause entre lots.
-4. **Envoi** — prévisualiser sur des lignes réelles, puis cliquer *Envoyer*. Une confirmation s'affiche avant d'envoyer. Pendant l'exécution, une barre de progression en direct et un bouton *Annuler l'envoi* permettent de reprendre la main.
+1. **Modèles** : créer un modèle avec sujet et corps HTML. L'éditeur propose gras / italique / souligné, listes, insertion de lien (http/https/mailto uniquement), et un mode source HTML.
+2. **Données** : importer le fichier Excel. La première ligne sert d'en-têtes; les colonnes deviennent des placeholders Handlebars (`{{prenom}}`, `{{societe}}`, ...).
+3. **Configuration** : renseigner SMTP (serveur, port, sécurité, identifiant, expéditeur). Le mot de passe est écrit dans le trousseau système (macOS Keychain, Windows Credential Manager, Linux Secret Service) et jamais dans le JSON local. Régler la temporisation: maximum par minute, pause minimale, taille de lot et pause entre lots.
+4. **Envoi** : prévisualiser sur des lignes réelles, puis cliquer *Envoyer*. Une confirmation s'affiche avant d'envoyer. Pendant l'exécution, une barre de progression en direct et un bouton *Annuler l'envoi* permettent de reprendre la main.
 
 
 

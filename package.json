@@ -2,6 +2,8 @@
   "name": "mailer",
   "private": true,
   "version": "0.1.9",
+  "license": "MIT",
+  "author": "Sohaib LAFIFI - Université d'Artois",
   "type": "module",
   "scripts": {
     "dev": "vite --host 127.0.0.1 --port 1420",

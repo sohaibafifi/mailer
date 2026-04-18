@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Mailer : publipostage email simple</title>
+    <meta name="description" content="Application bureau pour le publipostage email : modèles HTML, fichier Excel, SMTP local." />
+    <style>
+      :root {
+        --bg: #0f1115;
+        --fg: #e8eaf0;
+        --muted: #9aa3b2;
+        --accent: #7c9cff;
+        --card: #171a21;
+        --border: #252a35;
+      }
+      * { box-sizing: border-box; }
+      html, body { margin: 0; padding: 0; }
+      body {
+        background: var(--bg);
+        color: var(--fg);
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+        line-height: 1.6;
+        -webkit-font-smoothing: antialiased;
+      }
+      .wrap { max-width: 880px; margin: 0 auto; padding: 64px 24px; }
+      header { text-align: center; margin-bottom: 48px; }
+      h1 { font-size: 2.5rem; margin: 0 0 12px; letter-spacing: -0.02em; }
+      .tagline { color: var(--muted); font-size: 1.15rem; margin: 0 0 28px; }
+      .cta {
+        display: inline-block;
+        background: var(--accent);
+        color: #0f1115;
+        font-weight: 600;
+        text-decoration: none;
+        padding: 12px 24px;
+        border-radius: 8px;
+        transition: transform 0.1s ease;
+      }
+      .cta:hover { transform: translateY(-1px); }
+      .shot { margin: 48px 0; }
+      .shot img { display: block; width: 100%; height: auto; }
+      h2 { font-size: 1.4rem; margin: 48px 0 16px; letter-spacing: -0.01em; }
+      ul { padding-left: 20px; }
+      li { margin: 8px 0; }
+      li strong { color: var(--fg); }
+      li { color: var(--muted); }
+      footer {
+        margin-top: 64px;
+        padding-top: 24px;
+        border-top: 1px solid var(--border);
+        color: var(--muted);
+        font-size: 0.9rem;
+        text-align: center;
+      }
+      footer a { color: var(--muted); }
+      footer p { margin: 4px 0; }
+      @media (max-width: 600px) {
+        h1 { font-size: 2rem; }
+        .wrap { padding: 40px 20px; }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <header>
+        <h1>Mailer</h1>
+        <p class="tagline">Publipostage email simple, local et privé.</p>
+        <a class="cta" href="https://github.com/sohaibafifi/mailer/releases/latest">Télécharger</a>
+      </header>
+
+      <div class="shot">
+        <img src="screenshot.png" alt="Aperçu de Mailer" />
+      </div>
+
+      <h2>Fonctionnalités</h2>
+      <ul>
+        <li><strong>Éditeur HTML</strong> : gras, italique, souligné, listes et liens validés.</li>
+        <li><strong>Modèles réutilisables</strong> : sauvegardés localement sur votre machine.</li>
+        <li><strong>Import Excel</strong> : les colonnes alimentent automatiquement les champs du message.</li>
+        <li><strong>SMTP de votre choix</strong> : configuration locale, mot de passe stocké dans le trousseau système.</li>
+        <li><strong>Envoi maîtrisé</strong> : progression en direct, annulation à tout moment, confirmation avant envoi.</li>
+        <li><strong>Mises à jour signées</strong> : distribuées directement via GitHub Releases.</li>
+      </ul>
+
+      <h2>Plateformes</h2>
+      <ul>
+        <li>macOS</li>
+        <li>Windows</li>
+        <li>Linux</li>
+      </ul>
+
+      <footer>
+        <p>&copy; 2026 Sohaib LAFIFI - Université d'Artois. Distribué sous licence <a href="https://github.com/sohaibafifi/mailer/blob/main/LICENSE">MIT</a>.</p>
+        <p><a href="https://github.com/sohaibafifi/mailer">Code source</a></p>
+      </footer>
+    </div>
+  </body>
+</html>

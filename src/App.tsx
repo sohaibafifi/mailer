@@ -61,7 +61,7 @@ type PanelId = "templates" | "excel" | "configuration" | "send" | "about";
 
 const panels: Array<{ id: PanelId; label: string }> = [
   { id: "templates", label: "Modèles" },
-  { id: "excel", label: "Excel" },
+  { id: "excel", label: "Données" },
   { id: "send", label: "Envoi" },
   { id: "configuration", label: "Configuration" },
   { id: "about", label: "À propos" },
@@ -540,11 +540,11 @@ function App() {
           <section className="panel">
             <div className="panel-heading">
               <div>
-                <h2>Excel</h2>
+                <h2>Données</h2>
                 <p>La première ligne doit contenir les noms de colonnes.</p>
               </div>
               <button type="button" className="primary" onClick={handlePickExcel} disabled={busy}>
-                Importer Excel
+                Importer un fichier
               </button>
             </div>
 
@@ -773,7 +773,7 @@ function App() {
 
             <div className="status-row">
               <span>{selectedTemplate ? selectedTemplate.name : "Modèle non sauvegardé"}</span>
-              <span>{workbook ? workbook.fileName : "Aucun Excel"}</span>
+              <span>{workbook ? workbook.fileName : "Aucune donnée"}</span>
               <span>{smtp.host || "SMTP non configuré"}</span>
             </div>
 

@@ -5,6 +5,7 @@ Application bureau pour le publipostage email, avec:
 - un éditeur HTML intégré (gras, italique, souligné, listes, liens validés);
 - des modèles sauvegardés localement;
 - un fichier Excel dont les colonnes alimentent les champs via Handlebars (`{{prenom}}`, etc.);
+- des pièces jointes optionnelles dont les chemins viennent du fichier Excel;
 - une configuration SMTP locale, mot de passe stocké dans le trousseau système;
 - un envoi avec progression live, annulation et confirmation;
 - des mises à jour signées distribuées via GitHub Releases.
@@ -50,7 +51,7 @@ npm run desktop:release
 1. **Modèles** : créer un modèle avec sujet et corps HTML. L'éditeur propose gras / italique / souligné, listes, insertion de lien (http/https/mailto uniquement), et un mode source HTML.
 2. **Données** : importer le fichier Excel. La première ligne sert d'en-têtes; les colonnes deviennent des placeholders Handlebars (`{{prenom}}`, `{{societe}}`, ...).
 3. **Configuration** : renseigner SMTP (serveur, port, sécurité, identifiant, expéditeur). Le mot de passe est écrit dans le trousseau système (macOS Keychain, Windows Credential Manager, Linux Secret Service) et jamais dans le JSON local. Régler la temporisation: maximum par minute, pause minimale, taille de lot et pause entre lots.
-4. **Envoi** : prévisualiser sur des lignes réelles, puis cliquer *Envoyer*. Une confirmation s'affiche avant d'envoyer. Pendant l'exécution, une barre de progression en direct et un bouton *Annuler l'envoi* permettent de reprendre la main.
+4. **Envoi** : choisir la colonne email et, si besoin, la colonne des pièces jointes. Chaque cellule peut contenir un chemin absolu, ou un chemin relatif au dossier du fichier Excel; plusieurs fichiers peuvent être séparés par `;` ou par un retour ligne. Prévisualiser sur des lignes réelles, puis cliquer *Envoyer*. Une confirmation s'affiche avant d'envoyer. Pendant l'exécution, une barre de progression en direct et un bouton *Annuler l'envoi* permettent de reprendre la main.
 
 
 
@@ -114,5 +115,4 @@ Le workflow `.github/workflows/release.yml` injecte la clé publique, construit 
 ## Limites connues
 
 - Pas encore de journal complet des campagnes.
-- Pas encore de gestion de pièces jointes.
 - Le fichier Excel est relu depuis son chemin d'origine au moment de l'envoi: s'il est déplacé entre import et envoi, l'opération échoue.

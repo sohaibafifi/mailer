@@ -63,6 +63,15 @@ export type RenderedPreview = {
 export type PreviewSample = RenderedPreview & {
   rowNumber: number;
   recipient: string | null;
+  attachments: PreviewAttachment[];
+};
+
+export type PreviewAttachment = {
+  filename: string;
+  path: string;
+  exists: boolean;
+  sizeBytes: number | null;
+  message: string | null;
 };
 
 export type RateLimitConfig = {
@@ -77,6 +86,7 @@ export type SendCampaignRequest = {
   excelPath: string;
   sheetName: string | null;
   recipientField: string;
+  attachmentField: string | null;
   dryRun: boolean;
   testEmail: string | null;
   limit: number | null;

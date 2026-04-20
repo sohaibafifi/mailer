@@ -335,9 +335,14 @@ th {
 }
 
 .form-grid {
+  align-items: start;
   display: grid;
   gap: 12px;
   grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.form-grid > label {
+  align-content: start;
 }
 
 .form-grid.two {
@@ -669,6 +674,39 @@ th {
   font-weight: 750;
   min-width: 48px;
   text-align: center;
+}
+
+.attachment-preview-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.attachment-preview {
+  align-items: center;
+  border: 1px solid #d7dfd8;
+  border-radius: 8px;
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-height: 34px;
+  padding: 6px 9px;
+}
+
+.attachment-preview.ok {
+  background: #edf8f1;
+  border-color: #b7dac4;
+  color: #155d33;
+}
+
+.attachment-preview.missing {
+  background: #fde8e5;
+  border-color: #efbbb4;
+  color: #8e2117;
+}
+
+.attachment-preview strong {
+  color: inherit;
 }
 
 .preview-box {

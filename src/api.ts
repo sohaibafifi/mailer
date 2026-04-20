@@ -51,6 +51,7 @@ export function previewTemplateSamples(
   excelPath: string,
   sheetName: string | null,
   recipientField: string | null,
+  attachmentField: string | null,
   count: number,
 ) {
   return invoke<PreviewSample[]>("preview_template_samples", {
@@ -58,6 +59,7 @@ export function previewTemplateSamples(
     excelPath,
     sheetName,
     recipientField,
+    attachmentField,
     count,
   });
 }

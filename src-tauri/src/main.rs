@@ -3,7 +3,7 @@
 use std::{
     collections::{BTreeMap, HashSet},
     fs,
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::atomic::{AtomicBool, Ordering},
     thread,
     time::{Duration, SystemTime, UNIX_EPOCH},
@@ -15,7 +15,7 @@ use deunicode::deunicode;
 use handlebars::{no_escape, Handlebars, RenderError, RenderErrorReason};
 use keyring::Entry;
 use lettre::{
-    message::{header, Mailbox, MultiPart, SinglePart},
+    message::{header, Attachment, Mailbox, MultiPart, SinglePart},
     transport::smtp::{authentication::Credentials, SmtpTransportBuilder},
     Message, SmtpTransport, Transport,
 };
@@ -141,6 +141,7 @@ struct SendCampaignRequest {
     excel_path: String,
     sheet_name: Option<String>,
     recipient_field: String,
+    attachment_field: Option<String>,
     dry_run: bool,
     test_email: Option<String>,
     limit: Option<usize>,
@@ -163,6 +164,12 @@ struct RateLimitRuntime {
     batch_pause: Duration,
 }
 
+#[derive(Debug, Clone)]
+struct EmailAttachment {
+    filename: String,
+    content: Vec<u8>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct RenderedPreview {
@@ -179,6 +186,17 @@ struct PreviewSample {
     subject: String,
     body_html: String,
     body_text: String,
+    attachments: Vec<PreviewAttachment>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PreviewAttachment {
+    filename: String,
+    path: String,
+    exists: bool,
+    size_bytes: Option<u64>,
+    message: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -331,6 +349,7 @@ async fn send_smtp_test(input: SmtpConfigInput, email: String) -> Result<String,
             "Test Mailer",
             html,
             "La configuration SMTP Mailer est opérationnelle.",
+            &[],
         )?;
         Ok("Email de test envoyé.".to_string())
     })
@@ -365,10 +384,16 @@ fn preview_template_samples(
     excel_path: String,
     sheet_name: Option<String>,
     recipient_field: Option<String>,
+    attachment_field: Option<String>,
     count: usize,
 ) -> Result<Vec<PreviewSample>, String> {
     validate_template(&input)?;
-    let workbook = read_workbook_data(PathBuf::from(excel_path), sheet_name)?;
+    let excel_path = PathBuf::from(excel_path);
+    let attachment_base_dir = excel_path
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from("."));
+    let workbook = read_workbook_data(excel_path, sheet_name)?;
     if workbook.rows.is_empty() {
         return Err("Aucune ligne exploitable dans le fichier Excel.".to_string());
     }
@@ -381,6 +406,18 @@ fn preview_template_samples(
             .any(|candidate| candidate.key == field)
         {
             return Err("Le champ email sélectionné n'existe pas dans ce fichier.".to_string());
+        }
+    }
+    let attachment_key = attachment_field.as_deref().and_then(trimmed_optional);
+    if let Some(field) = attachment_key.as_deref() {
+        if !workbook
+            .fields
+            .iter()
+            .any(|candidate| candidate.key == field)
+        {
+            return Err(
+                "Le champ de pièces jointes sélectionné n'existe pas dans ce fichier.".to_string(),
+            );
         }
     }
 
@@ -400,6 +437,11 @@ fn preview_template_samples(
                 subject: rendered.subject,
                 body_html: rendered.body_html,
                 body_text: rendered.body_text,
+                attachments: preview_row_attachments(
+                    &row,
+                    attachment_key.as_deref(),
+                    &attachment_base_dir,
+                ),
             })
         })
         .collect()
@@ -458,10 +500,12 @@ fn send_campaign_inner(
         .iter()
         .find(|template| template.id == request.template_id)
         .ok_or_else(|| "Modèle introuvable.".to_string())?;
-    let workbook = read_workbook_data(
-        PathBuf::from(&request.excel_path),
-        request.sheet_name.clone(),
-    )?;
+    let excel_path = PathBuf::from(&request.excel_path);
+    let attachment_base_dir = excel_path
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from("."));
+    let workbook = read_workbook_data(excel_path, request.sheet_name.clone())?;
 
     if !workbook
         .fields
@@ -469,6 +513,20 @@ fn send_campaign_inner(
         .any(|field| field.key == request.recipient_field)
     {
         return Err("Le champ email sélectionné n'existe pas dans ce fichier.".to_string());
+    }
+
+    let attachment_field = request
+        .attachment_field
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+    if let Some(field_key) = attachment_field.as_deref() {
+        if !workbook.fields.iter().any(|field| field.key == field_key) {
+            return Err(
+                "Le champ de pièces jointes sélectionné n'existe pas dans ce fichier.".to_string(),
+            );
+        }
     }
 
     let rows: Vec<RecipientRow> = workbook
@@ -484,7 +542,13 @@ fn send_campaign_inner(
     let rate_limit = normalize_rate_limit(&request.rate_limit)?;
 
     if request.dry_run {
-        return simulate_campaign(template, &rows, &request.recipient_field);
+        return simulate_campaign(
+            template,
+            &rows,
+            &request.recipient_field,
+            attachment_field.as_deref(),
+            &attachment_base_dir,
+        );
     }
 
     let config =
@@ -511,6 +575,8 @@ fn send_campaign_inner(
             .first()
             .ok_or_else(|| "Aucune ligne disponible pour l'email de test.".to_string())?;
         let rendered = render_template_parts(&template.subject, &template.body_html, &row.values)?;
+        let attachments =
+            load_row_attachments(row, attachment_field.as_deref(), &attachment_base_dir)?;
         send_email(
             &mailer,
             &stored_config,
@@ -518,6 +584,7 @@ fn send_campaign_inner(
             &rendered.subject,
             &rendered.body_html,
             &rendered.body_text,
+            &attachments,
         )?;
         return Ok(SendSummary {
             attempted: 1,
@@ -578,6 +645,8 @@ fn send_campaign_inner(
                 if summary.preview.is_none() {
                     summary.preview = Some(rendered.clone());
                 }
+                let attachments =
+                    load_row_attachments(&row, attachment_field.as_deref(), &attachment_base_dir)?;
                 send_email(
                     &mailer,
                     &stored_config,
@@ -585,6 +654,7 @@ fn send_campaign_inner(
                     &rendered.subject,
                     &rendered.body_html,
                     &rendered.body_text,
+                    &attachments,
                 )
             });
 
@@ -730,6 +800,8 @@ fn simulate_campaign(
     template: &MailingTemplate,
     rows: &[RecipientRow],
     recipient_field: &str,
+    attachment_field: Option<&str>,
+    attachment_base_dir: &Path,
 ) -> Result<SendSummary, String> {
     let mut summary = SendSummary {
         attempted: 0,
@@ -751,7 +823,13 @@ fn simulate_campaign(
             continue;
         }
 
-        match render_template_parts(&template.subject, &template.body_html, &row.values) {
+        let outcome = render_template_parts(&template.subject, &template.body_html, &row.values)
+            .and_then(|rendered| {
+                validate_row_attachments(row, attachment_field, attachment_base_dir)?;
+                Ok(rendered)
+            });
+
+        match outcome {
             Ok(rendered) => {
                 if summary.preview.is_none() {
                     summary.preview = Some(rendered);
@@ -775,6 +853,142 @@ fn push_failure(failures: &mut Vec<RowFailure>, failure: RowFailure) {
     if failures.len() < MAX_FAILURES {
         failures.push(failure);
     }
+}
+
+fn attachment_paths_from_row(
+    row: &RecipientRow,
+    attachment_field: Option<&str>,
+    base_dir: &Path,
+) -> Vec<PathBuf> {
+    let Some(field_key) = attachment_field else {
+        return Vec::new();
+    };
+
+    row.values
+        .get(field_key)
+        .map(|value| {
+            value
+                .split(|character| matches!(character, ';' | '\n' | '\r'))
+                .map(|raw_path| raw_path.trim().trim_matches('"'))
+                .filter(|raw_path| !raw_path.is_empty())
+                .map(|raw_path| {
+                    let path = PathBuf::from(raw_path);
+                    if path.is_absolute() {
+                        path
+                    } else {
+                        base_dir.join(path)
+                    }
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn validate_row_attachments(
+    row: &RecipientRow,
+    attachment_field: Option<&str>,
+    base_dir: &Path,
+) -> Result<(), String> {
+    for path in attachment_paths_from_row(row, attachment_field, base_dir) {
+        validate_attachment_path(&path)?;
+    }
+    Ok(())
+}
+
+fn preview_row_attachments(
+    row: &RecipientRow,
+    attachment_field: Option<&str>,
+    base_dir: &Path,
+) -> Vec<PreviewAttachment> {
+    attachment_paths_from_row(row, attachment_field, base_dir)
+        .into_iter()
+        .map(|path| {
+            let filename = attachment_filename(&path);
+            match fs::metadata(&path) {
+                Ok(metadata) if metadata.is_file() => PreviewAttachment {
+                    filename,
+                    path: path.to_string_lossy().to_string(),
+                    exists: true,
+                    size_bytes: Some(metadata.len()),
+                    message: None,
+                },
+                Ok(_) => PreviewAttachment {
+                    filename,
+                    path: path.to_string_lossy().to_string(),
+                    exists: false,
+                    size_bytes: None,
+                    message: Some("Ce chemin pointe vers un dossier.".to_string()),
+                },
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => PreviewAttachment {
+                    filename,
+                    path: path.to_string_lossy().to_string(),
+                    exists: false,
+                    size_bytes: None,
+                    message: Some("Fichier introuvable.".to_string()),
+                },
+                Err(error) => PreviewAttachment {
+                    filename,
+                    path: path.to_string_lossy().to_string(),
+                    exists: false,
+                    size_bytes: None,
+                    message: Some(format!("Fichier inaccessible: {error}")),
+                },
+            }
+        })
+        .collect()
+}
+
+fn load_row_attachments(
+    row: &RecipientRow,
+    attachment_field: Option<&str>,
+    base_dir: &Path,
+) -> Result<Vec<EmailAttachment>, String> {
+    attachment_paths_from_row(row, attachment_field, base_dir)
+        .into_iter()
+        .map(load_attachment)
+        .collect()
+}
+
+fn load_attachment(path: PathBuf) -> Result<EmailAttachment, String> {
+    validate_attachment_path(&path)?;
+    let filename = path
+        .file_name()
+        .map(|name| name.to_string_lossy().trim().to_string())
+        .filter(|name| !name.is_empty())
+        .ok_or_else(|| format!("Nom de pièce jointe invalide: {}", path.display()))?;
+    let content = fs::read(&path).map_err(|error| {
+        format!(
+            "Impossible de lire la pièce jointe {}: {error}",
+            path.display()
+        )
+    })?;
+    Ok(EmailAttachment { filename, content })
+}
+
+fn attachment_filename(path: &Path) -> String {
+    path.file_name()
+        .map(|name| name.to_string_lossy().trim().to_string())
+        .filter(|name| !name.is_empty())
+        .unwrap_or_else(|| path.to_string_lossy().to_string())
+}
+
+fn validate_attachment_path(path: &Path) -> Result<(), String> {
+    let metadata = fs::metadata(path).map_err(|error| {
+        if error.kind() == std::io::ErrorKind::NotFound {
+            format!("Pièce jointe introuvable: {}", path.display())
+        } else {
+            format!("Pièce jointe inaccessible: {} ({error})", path.display())
+        }
+    })?;
+
+    if !metadata.is_file() {
+        return Err(format!(
+            "Pièce jointe invalide (dossier): {}",
+            path.display()
+        ));
+    }
+
+    Ok(())
 }
 
 fn load_templates_inner(app: &AppHandle) -> Result<Vec<MailingTemplate>, String> {
@@ -866,6 +1080,7 @@ fn send_email(
     subject: &str,
     body_html: &str,
     body_text: &str,
+    attachments: &[EmailAttachment],
 ) -> Result<(), String> {
     let from_address = config
         .from_email
@@ -895,16 +1110,32 @@ fn send_email(
         body_html.to_string()
     };
 
-    let email = builder
-        .multipart(
-            MultiPart::alternative()
-                .singlepart(SinglePart::plain(plain))
-                .singlepart(
-                    SinglePart::builder()
-                        .header(header::ContentType::TEXT_HTML)
-                        .body(html),
-                ),
+    let alternative = MultiPart::alternative()
+        .singlepart(SinglePart::plain(plain))
+        .singlepart(
+            SinglePart::builder()
+                .header(header::ContentType::TEXT_HTML)
+                .body(html),
+        );
+    let multipart = if attachments.is_empty() {
+        alternative
+    } else {
+        attachments.iter().fold(
+            MultiPart::mixed().multipart(alternative),
+            |multipart, attachment| {
+                multipart.singlepart(
+                    Attachment::new(attachment.filename.clone()).body(
+                        attachment.content.clone(),
+                        header::ContentType::parse("application/octet-stream")
+                            .expect("valid attachment content type"),
+                    ),
+                )
+            },
         )
+    };
+
+    let email = builder
+        .multipart(multipart)
         .map_err(|error| format!("Email impossible à construire: {error}"))?;
 
     mailer
@@ -947,7 +1178,9 @@ fn render_text_template(source: &str, row: &BTreeMap<String, String>) -> Result<
 fn format_template_error(error: RenderError) -> String {
     match error.reason() {
         RenderErrorReason::MissingVariable(Some(field)) => {
-            format!("Champ inconnu: {{{{{field}}}}}. Vérifiez le nom du champ dans le fichier Excel.")
+            format!(
+                "Champ inconnu: {{{{{field}}}}}. Vérifiez le nom du champ dans le fichier Excel."
+            )
         }
         RenderErrorReason::MissingVariable(None) => {
             "Champ inconnu dans le modèle. Vérifiez les champs entre {{ }}.".to_string()

@@ -76,6 +76,24 @@ function getError(error: unknown) {
   return error instanceof Error ? error.message : String(error);
 }
 
+function formatFileSize(bytes: number) {
+  if (bytes < 1024) {
+    return `${bytes} o`;
+  }
+
+  const units = ["Ko", "Mo", "Go"];
+  let value = bytes / 1024;
+  let unitIndex = 0;
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024;
+    unitIndex += 1;
+  }
+
+  return `${value.toLocaleString("fr-FR", {
+    maximumFractionDigits: value >= 10 ? 0 : 1,
+  })} ${units[unitIndex]}`;
+}
+
 function parseOptionalInteger(
   value: string,
   label: string,
@@ -109,6 +127,7 @@ function App() {
   const [draft, setDraft] = useState<TemplateInput>(emptyTemplate);
   const [workbook, setWorkbook] = useState<WorkbookPreview | null>(null);
   const [recipientField, setRecipientField] = useState("");
+  const [attachmentField, setAttachmentField] = useState("");
   const [smtp, setSmtp] = useState<SmtpConfigInput>(emptySmtp);
   const [smtpPasswordSaved, setSmtpPasswordSaved] = useState(false);
   const [testEmail, setTestEmail] = useState("");
@@ -176,6 +195,7 @@ function App() {
 
   useEffect(() => {
     setRecipientField(findEmailField(workbook));
+    setAttachmentField("");
   }, [workbook]);
 
   useEffect(() => {
@@ -276,6 +296,7 @@ function App() {
         workbook.path,
         workbook.sheetName,
         recipientField || null,
+        attachmentField || null,
         10,
       );
       setPreviewSamples(samples);
@@ -363,6 +384,7 @@ function App() {
       excelPath: workbook.path,
       sheetName: workbook.sheetName,
       recipientField,
+      attachmentField: attachmentField || null,
       dryRun,
       testEmail: email,
       limit: parsedLimit,
@@ -777,7 +799,7 @@ function App() {
               <span>{smtp.host || "SMTP non configuré"}</span>
             </div>
 
-            <div className="form-grid two">
+            <div className="form-grid three">
               <label>
                 Champ email
                 <select
@@ -794,6 +816,26 @@ function App() {
                     </option>
                   ))}
                 </select>
+              </label>
+              <label>
+                Pièces jointes
+                <select
+                  value={attachmentField}
+                  onChange={(event) => {
+                    setAttachmentField(event.target.value);
+                    setSummary(null);
+                    setPreviewSamples([]);
+                    setPreviewIndex(0);
+                  }}
+                >
+                  <option value="">Aucune</option>
+                  {(workbook?.fields ?? []).map((field) => (
+                    <option key={field.key} value={field.key}>
+                      {field.header} ({field.key})
+                    </option>
+                  ))}
+                </select>
+                <span className="field-hint">Chemin(s) depuis Excel, séparés par ; ou retour ligne.</span>
               </label>
               <label>
                 Limite d'envoi
@@ -889,6 +931,28 @@ function App() {
                     </div>
                   ) : null}
                 </div>
+                {currentPreviewSample && attachmentField ? (
+                  currentPreviewSample.attachments.length > 0 ? (
+                    <div className="attachment-preview-list">
+                      {currentPreviewSample.attachments.map((attachment, index) => (
+                        <span
+                          key={`${attachment.path}-${index}`}
+                          className={`attachment-preview ${attachment.exists ? "ok" : "missing"}`}
+                          title={attachment.path}
+                        >
+                          <strong>{attachment.filename}</strong>
+                          <span>
+                            {attachment.exists && attachment.sizeBytes !== null
+                              ? `existe - ${formatFileSize(attachment.sizeBytes)}`
+                              : attachment.message ?? "Fichier introuvable."}
+                          </span>
+                        </span>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="preview-meta">Aucune pièce jointe pour cette ligne.</p>
+                  )
+                ) : null}
                 <p className="preview-subject">{currentPreview.subject}</p>
                 <div className="preview-box" dangerouslySetInnerHTML={{ __html: safePreviewHtml }} />
               </section>

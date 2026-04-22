@@ -72,6 +72,7 @@ export type PreviewAttachment = {
   exists: boolean;
   sizeBytes: number | null;
   message: string | null;
+  sourceDir: string | null;
 };
 
 export type RateLimitConfig = {

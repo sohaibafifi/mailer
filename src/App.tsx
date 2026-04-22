@@ -17,6 +17,7 @@ import {
 import type {
   CampaignProgress,
   MailingTemplate,
+  PreviewAttachment,
   PreviewSample,
   RenderedPreview,
   SendSummary,
@@ -104,10 +105,46 @@ function parseOptionalInteger(
     return null;
   }
   const parsed = Number(trimmed);
-  if (!Number.isInteger(parsed) || parsed < options.min || parsed > options.max) {
-    throw new Error(`${label} doit être un entier entre ${options.min} et ${options.max}.`);
+  if (
+    !Number.isInteger(parsed) ||
+    parsed < options.min ||
+    parsed > options.max
+  ) {
+    throw new Error(
+      `${label} doit être un entier entre ${options.min} et ${options.max}.`,
+    );
   }
   return parsed;
+}
+
+type AttachmentGroup = {
+  sourceDir: string | null;
+  dirName: string | null;
+  items: PreviewAttachment[];
+};
+
+function groupAttachments(attachments: PreviewAttachment[]): AttachmentGroup[] {
+  const groups: AttachmentGroup[] = [];
+  for (const attachment of attachments) {
+    const last = groups[groups.length - 1];
+    if (last && last.sourceDir === attachment.sourceDir) {
+      last.items.push(attachment);
+    } else {
+      const dirName = attachment.sourceDir
+        ? (attachment.sourceDir
+            .replace(/\\/g, "/")
+            .split("/")
+            .filter(Boolean)
+            .pop() ?? attachment.sourceDir)
+        : null;
+      groups.push({
+        sourceDir: attachment.sourceDir,
+        dirName,
+        items: [attachment],
+      });
+    }
+  }
+  return groups;
 }
 
 function findEmailField(workbook: WorkbookPreview | null) {
@@ -115,8 +152,11 @@ function findEmailField(workbook: WorkbookPreview | null) {
     return "";
   }
   return (
-    workbook.fields.find((field) => /^(email|e_mail|mail|courriel|adresse_mail)$/i.test(field.key))?.key ??
-    workbook.fields.find((field) => /email|mail|courriel/i.test(field.key))?.key ??
+    workbook.fields.find((field) =>
+      /^(email|e_mail|mail|courriel|adresse_mail)$/i.test(field.key),
+    )?.key ??
+    workbook.fields.find((field) => /email|mail|courriel/i.test(field.key))
+      ?.key ??
     workbook.fields[0]?.key ??
     ""
   );
@@ -146,7 +186,9 @@ function App() {
   const [appVersion, setAppVersion] = useState("");
 
   useEffect(() => {
-    getVersion().then(setAppVersion).catch(() => setAppVersion(""));
+    getVersion()
+      .then(setAppVersion)
+      .catch(() => setAppVersion(""));
   }, []);
 
   const selectedTemplate = useMemo(
@@ -154,7 +196,8 @@ function App() {
     [draft.id, templates],
   );
 
-  const placeholders = workbook?.fields.map((field) => `{{${field.key}}}`) ?? [];
+  const placeholders =
+    workbook?.fields.map((field) => `{{${field.key}}}`) ?? [];
   const currentPreviewSample = previewSamples[previewIndex] ?? null;
   const currentPreview = currentPreviewSample ?? preview;
   const effectiveDelayMs = useMemo(() => {
@@ -167,7 +210,10 @@ function App() {
   useEffect(() => {
     async function boot() {
       try {
-        const [savedTemplates, savedSmtp] = await Promise.all([loadTemplates(), loadSmtpConfig()]);
+        const [savedTemplates, savedSmtp] = await Promise.all([
+          loadTemplates(),
+          loadSmtpConfig(),
+        ]);
         setTemplates(savedTemplates);
         if (savedTemplates[0]) {
           setDraft(savedTemplates[0]);
@@ -213,7 +259,10 @@ function App() {
     [currentPreviewSample, preview],
   );
 
-  async function runTask(task: () => Promise<void>, fallback = "Action impossible.") {
+  async function runTask(
+    task: () => Promise<void>,
+    fallback = "Action impossible.",
+  ) {
     setBusy(true);
     try {
       await task();
@@ -246,7 +295,8 @@ function App() {
     await runTask(async () => {
       const saved = await saveTemplate(draft);
       setTemplates(saved);
-      const next = saved.find((template) => template.name === draft.name) ?? saved[0];
+      const next =
+        saved.find((template) => template.name === draft.name) ?? saved[0];
       if (next) {
         setDraft(next);
       }
@@ -287,7 +337,10 @@ function App() {
 
   async function handlePreview() {
     if (!workbook || workbook.totalRows === 0) {
-      setNotice({ kind: "error", text: "Importez un fichier Excel avant la prévisualisation." });
+      setNotice({
+        kind: "error",
+        text: "Importez un fichier Excel avant la prévisualisation.",
+      });
       return;
     }
     await runTask(async () => {
@@ -302,7 +355,10 @@ function App() {
       setPreviewSamples(samples);
       setPreviewIndex(0);
       setPreview(samples[0] ?? null);
-      setNotice({ kind: "success", text: `${samples.length} prévisualisations générées.` });
+      setNotice({
+        kind: "success",
+        text: `${samples.length} prévisualisations générées.`,
+      });
     });
   }
 
@@ -332,7 +388,10 @@ function App() {
       return;
     }
     if (smtp.username.trim() && !smtp.password?.trim() && !smtpPasswordSaved) {
-      setNotice({ kind: "error", text: "Saisissez le mot de passe SMTP avant de tester." });
+      setNotice({
+        kind: "error",
+        text: "Saisissez le mot de passe SMTP avant de tester.",
+      });
       return;
     }
     await runTask(async () => {
@@ -352,32 +411,53 @@ function App() {
       throw new Error("Sélectionnez le champ qui contient l'adresse email.");
     }
     const parsedLimit = sendLimit.trim() ? Number(sendLimit) : null;
-    if (parsedLimit !== null && (!Number.isFinite(parsedLimit) || parsedLimit < 1)) {
+    if (
+      parsedLimit !== null &&
+      (!Number.isFinite(parsedLimit) || parsedLimit < 1)
+    ) {
       throw new Error("La limite doit être vide ou supérieure à 0.");
     }
     const parsedRateLimit = {
-      maxPerMinute: parseOptionalInteger(rateLimit.maxPerMinute, "Le maximum par minute", {
-        min: 1,
-        max: 600,
-      }),
-      minDelayMs: parseOptionalInteger(rateLimit.minDelayMs, "La pause minimale", {
-        min: 0,
-        max: 600_000,
-      }),
+      maxPerMinute: parseOptionalInteger(
+        rateLimit.maxPerMinute,
+        "Le maximum par minute",
+        {
+          min: 1,
+          max: 600,
+        },
+      ),
+      minDelayMs: parseOptionalInteger(
+        rateLimit.minDelayMs,
+        "La pause minimale",
+        {
+          min: 0,
+          max: 600_000,
+        },
+      ),
       batchSize: parseOptionalInteger(rateLimit.batchSize, "La taille de lot", {
         min: 1,
         max: 100_000,
       }),
       batchPauseMs:
-        parseOptionalInteger(rateLimit.batchPauseSeconds, "La pause entre lots", {
-          min: 0,
-          max: 3600,
-        }) === null
+        parseOptionalInteger(
+          rateLimit.batchPauseSeconds,
+          "La pause entre lots",
+          {
+            min: 0,
+            max: 3600,
+          },
+        ) === null
           ? null
           : Number(rateLimit.batchPauseSeconds.trim()) * 1000,
     };
-    if (parsedRateLimit.batchPauseMs !== null && parsedRateLimit.batchPauseMs > 0 && parsedRateLimit.batchSize === null) {
-      throw new Error("Renseignez une taille de lot pour utiliser une pause entre lots.");
+    if (
+      parsedRateLimit.batchPauseMs !== null &&
+      parsedRateLimit.batchPauseMs > 0 &&
+      parsedRateLimit.batchSize === null
+    ) {
+      throw new Error(
+        "Renseignez une taille de lot pour utiliser une pause entre lots.",
+      );
     }
     return {
       templateId: draft.id,
@@ -414,7 +494,8 @@ function App() {
         setPreviewIndex(0);
         const cancelled = progress?.status === "cancelled";
         setNotice({
-          kind: result.failed.length > 0 ? "error" : cancelled ? "info" : "success",
+          kind:
+            result.failed.length > 0 ? "error" : cancelled ? "info" : "success",
           text: cancelled
             ? `Envoi interrompu: ${result.sent} envoyés, ${result.failed.length} erreurs.`
             : `${result.sent} envoyés, ${result.skipped} ignorés, ${result.failed.length} erreurs.`,
@@ -437,7 +518,10 @@ function App() {
   async function handleUpdate() {
     await runTask(async () => {
       const result = await downloadAndInstallUpdate();
-      setNotice({ kind: result.status === "installed" ? "success" : "info", text: result.message });
+      setNotice({
+        kind: result.status === "installed" ? "success" : "info",
+        text: result.message,
+      });
     });
   }
 
@@ -484,13 +568,28 @@ function App() {
                 <p>Choisissez un modèle ou créez-en un nouveau.</p>
               </div>
               <div className="button-row">
-                <button type="button" className="ghost" onClick={startNewTemplate} disabled={busy}>
+                <button
+                  type="button"
+                  className="ghost"
+                  onClick={startNewTemplate}
+                  disabled={busy}
+                >
                   Nouveau
                 </button>
-                <button type="button" className="ghost" onClick={handleDeleteTemplate} disabled={busy || !draft.id}>
+                <button
+                  type="button"
+                  className="ghost"
+                  onClick={handleDeleteTemplate}
+                  disabled={busy || !draft.id}
+                >
                   Supprimer
                 </button>
-                <button type="button" className="primary" onClick={handleSaveTemplate} disabled={busy}>
+                <button
+                  type="button"
+                  className="primary"
+                  onClick={handleSaveTemplate}
+                  disabled={busy}
+                >
                   Sauvegarder
                 </button>
               </div>
@@ -501,14 +600,18 @@ function App() {
               <select
                 value={draft.id ?? ""}
                 onChange={(event) => {
-                  const template = templates.find((item) => item.id === event.target.value);
+                  const template = templates.find(
+                    (item) => item.id === event.target.value,
+                  );
                   if (template) {
                     selectTemplate(template);
                   }
                 }}
               >
                 <option value="" disabled>
-                  {templates.length ? "Sélectionner" : "Aucun modèle sauvegardé"}
+                  {templates.length
+                    ? "Sélectionner"
+                    : "Aucun modèle sauvegardé"}
                 </option>
                 {templates.map((template) => (
                   <option key={template.id} value={template.id}>
@@ -522,7 +625,9 @@ function App() {
                 Nom du modèle
                 <input
                   value={draft.name}
-                  onChange={(event) => setDraft({ ...draft, name: event.target.value })}
+                  onChange={(event) =>
+                    setDraft({ ...draft, name: event.target.value })
+                  }
                   placeholder="Relance salon"
                 />
               </label>
@@ -532,7 +637,9 @@ function App() {
               Sujet
               <input
                 value={draft.subject}
-                onChange={(event) => setDraft({ ...draft, subject: event.target.value })}
+                onChange={(event) =>
+                  setDraft({ ...draft, subject: event.target.value })
+                }
                 placeholder="Bonjour {{prenom}}"
               />
             </label>
@@ -542,7 +649,9 @@ function App() {
               <RichHtmlEditor
                 value={draft.bodyHtml}
                 placeholders={placeholders}
-                onChange={(bodyHtml) => setDraft({ ...draft, bodyHtml, bodyText: "" })}
+                onChange={(bodyHtml) =>
+                  setDraft({ ...draft, bodyHtml, bodyText: "" })
+                }
               />
             </div>
 
@@ -553,7 +662,9 @@ function App() {
                 ))}
               </div>
             ) : (
-              <p className="muted">Importez un fichier Excel pour afficher les champs disponibles.</p>
+              <p className="muted">
+                Importez un fichier Excel pour afficher les champs disponibles.
+              </p>
             )}
           </section>
         ) : null}
@@ -565,7 +676,12 @@ function App() {
                 <h2>Données</h2>
                 <p>La première ligne doit contenir les noms de colonnes.</p>
               </div>
-              <button type="button" className="primary" onClick={handlePickExcel} disabled={busy}>
+              <button
+                type="button"
+                className="primary"
+                onClick={handlePickExcel}
+                disabled={busy}
+              >
                 Importer un fichier
               </button>
             </div>
@@ -621,10 +737,20 @@ function App() {
                 <p>Réglez SMTP et la temporisation des campagnes.</p>
               </div>
               <div className="button-row">
-                <button type="button" className="ghost" onClick={handleSmtpTest} disabled={busy}>
+                <button
+                  type="button"
+                  className="ghost"
+                  onClick={handleSmtpTest}
+                  disabled={busy}
+                >
                   Tester SMTP
                 </button>
-                <button type="button" className="primary" onClick={handleSaveSmtp} disabled={busy}>
+                <button
+                  type="button"
+                  className="primary"
+                  onClick={handleSaveSmtp}
+                  disabled={busy}
+                >
                   Sauvegarder
                 </button>
               </div>
@@ -637,7 +763,9 @@ function App() {
                   Serveur
                   <input
                     value={smtp.host}
-                    onChange={(event) => setSmtp({ ...smtp, host: event.target.value })}
+                    onChange={(event) =>
+                      setSmtp({ ...smtp, host: event.target.value })
+                    }
                     placeholder="smtp.exemple.fr"
                   />
                 </label>
@@ -647,14 +775,22 @@ function App() {
                     type="number"
                     min="1"
                     value={smtp.port}
-                    onChange={(event) => setSmtp({ ...smtp, port: Number(event.target.value) })}
+                    onChange={(event) =>
+                      setSmtp({ ...smtp, port: Number(event.target.value) })
+                    }
                   />
                 </label>
                 <label>
                   Sécurité
                   <select
                     value={smtp.security}
-                    onChange={(event) => setSmtp({ ...smtp, security: event.target.value as SmtpConfigInput["security"] })}
+                    onChange={(event) =>
+                      setSmtp({
+                        ...smtp,
+                        security: event.target
+                          .value as SmtpConfigInput["security"],
+                      })
+                    }
                   >
                     <option value="startTls">STARTTLS</option>
                     <option value="tls">TLS direct</option>
@@ -665,7 +801,9 @@ function App() {
                   Identifiant
                   <input
                     value={smtp.username}
-                    onChange={(event) => setSmtp({ ...smtp, username: event.target.value })}
+                    onChange={(event) =>
+                      setSmtp({ ...smtp, username: event.target.value })
+                    }
                     placeholder="compte SMTP"
                   />
                 </label>
@@ -674,10 +812,26 @@ function App() {
                   <input
                     type="password"
                     value={smtp.password ?? ""}
-                    onChange={(event) => setSmtp({ ...smtp, password: event.target.value, clearPassword: false })}
-                    placeholder={smtpPasswordSaved ? "laisser vide pour conserver" : "optionnel à la sauvegarde"}
+                    onChange={(event) =>
+                      setSmtp({
+                        ...smtp,
+                        password: event.target.value,
+                        clearPassword: false,
+                      })
+                    }
+                    placeholder={
+                      smtpPasswordSaved
+                        ? "laisser vide pour conserver"
+                        : "optionnel à la sauvegarde"
+                    }
                   />
-                  <span className={smtpPasswordSaved ? "field-hint success-text" : "field-hint"}>
+                  <span
+                    className={
+                      smtpPasswordSaved
+                        ? "field-hint success-text"
+                        : "field-hint"
+                    }
+                  >
                     {smtpPasswordSaved
                       ? "Mot de passe enregistré."
                       : "Vous pourrez sauvegarder sans mot de passe, mais il sera requis pour tester ou envoyer."}
@@ -695,7 +849,9 @@ function App() {
                   Email expéditeur
                   <input
                     value={smtp.fromEmail}
-                    onChange={(event) => setSmtp({ ...smtp, fromEmail: event.target.value })}
+                    onChange={(event) =>
+                      setSmtp({ ...smtp, fromEmail: event.target.value })
+                    }
                     placeholder="contact@exemple.fr"
                   />
                 </label>
@@ -703,7 +859,9 @@ function App() {
                   Nom expéditeur
                   <input
                     value={smtp.fromName}
-                    onChange={(event) => setSmtp({ ...smtp, fromName: event.target.value })}
+                    onChange={(event) =>
+                      setSmtp({ ...smtp, fromName: event.target.value })
+                    }
                     placeholder="Votre équipe"
                   />
                 </label>
@@ -711,7 +869,9 @@ function App() {
                   Réponse à
                   <input
                     value={smtp.replyTo ?? ""}
-                    onChange={(event) => setSmtp({ ...smtp, replyTo: event.target.value || null })}
+                    onChange={(event) =>
+                      setSmtp({ ...smtp, replyTo: event.target.value || null })
+                    }
                     placeholder="optionnel"
                   />
                 </label>
@@ -725,7 +885,12 @@ function App() {
                   Maximum par minute
                   <input
                     value={rateLimit.maxPerMinute}
-                    onChange={(event) => setRateLimit({ ...rateLimit, maxPerMinute: event.target.value })}
+                    onChange={(event) =>
+                      setRateLimit({
+                        ...rateLimit,
+                        maxPerMinute: event.target.value,
+                      })
+                    }
                     placeholder="30"
                   />
                 </label>
@@ -733,7 +898,12 @@ function App() {
                   Pause minimale (ms)
                   <input
                     value={rateLimit.minDelayMs}
-                    onChange={(event) => setRateLimit({ ...rateLimit, minDelayMs: event.target.value })}
+                    onChange={(event) =>
+                      setRateLimit({
+                        ...rateLimit,
+                        minDelayMs: event.target.value,
+                      })
+                    }
                     placeholder="1000"
                   />
                 </label>
@@ -741,7 +911,12 @@ function App() {
                   Taille de lot
                   <input
                     value={rateLimit.batchSize}
-                    onChange={(event) => setRateLimit({ ...rateLimit, batchSize: event.target.value })}
+                    onChange={(event) =>
+                      setRateLimit({
+                        ...rateLimit,
+                        batchSize: event.target.value,
+                      })
+                    }
                     placeholder="vide"
                   />
                 </label>
@@ -749,7 +924,12 @@ function App() {
                   Pause entre lots (s)
                   <input
                     value={rateLimit.batchPauseSeconds}
-                    onChange={(event) => setRateLimit({ ...rateLimit, batchPauseSeconds: event.target.value })}
+                    onChange={(event) =>
+                      setRateLimit({
+                        ...rateLimit,
+                        batchPauseSeconds: event.target.value,
+                      })
+                    }
                     placeholder="vide"
                   />
                 </label>
@@ -774,7 +954,12 @@ function App() {
                 <p>Simulez, vérifiez, puis lancez la campagne.</p>
               </div>
               <div className="button-row">
-                <button type="button" className="ghost" onClick={handlePreview} disabled={busy || !workbook}>
+                <button
+                  type="button"
+                  className="ghost"
+                  onClick={handlePreview}
+                  disabled={busy || !workbook}
+                >
                   Prévisualiser
                 </button>
                 <button
@@ -786,7 +971,11 @@ function App() {
                   Envoyer
                 </button>
                 {sending ? (
-                  <button type="button" className="ghost" onClick={handleCancelCampaign}>
+                  <button
+                    type="button"
+                    className="ghost"
+                    onClick={handleCancelCampaign}
+                  >
                     Annuler l'envoi
                   </button>
                 ) : null}
@@ -794,7 +983,11 @@ function App() {
             </div>
 
             <div className="status-row">
-              <span>{selectedTemplate ? selectedTemplate.name : "Modèle non sauvegardé"}</span>
+              <span>
+                {selectedTemplate
+                  ? selectedTemplate.name
+                  : "Modèle non sauvegardé"}
+              </span>
               <span>{workbook ? workbook.fileName : "Aucune donnée"}</span>
               <span>{smtp.host || "SMTP non configuré"}</span>
             </div>
@@ -835,11 +1028,17 @@ function App() {
                     </option>
                   ))}
                 </select>
-                <span className="field-hint">Chemin(s) depuis Excel, séparés par ; ou retour ligne.</span>
+                <span className="field-hint">
+                  Chemin(s) depuis Excel, séparés par ; ou retour ligne.
+                </span>
               </label>
               <label>
                 Limite d'envoi
-                <input value={sendLimit} onChange={(event) => setSendLimit(event.target.value)} placeholder="vide" />
+                <input
+                  value={sendLimit}
+                  onChange={(event) => setSendLimit(event.target.value)}
+                  placeholder="vide"
+                />
               </label>
             </div>
 
@@ -853,7 +1052,9 @@ function App() {
                   <span>{progress.skipped} ignorés</span>
                   <span>{progress.failed} erreurs</span>
                   {progress.currentRecipient ? (
-                    <span className="progress-current">→ {progress.currentRecipient}</span>
+                    <span className="progress-current">
+                      → {progress.currentRecipient}
+                    </span>
                   ) : null}
                 </div>
                 <div
@@ -871,7 +1072,9 @@ function App() {
                   />
                 </div>
                 {progress.lastError ? (
-                  <p className="progress-error">Dernière erreur : {progress.lastError}</p>
+                  <p className="progress-error">
+                    Dernière erreur : {progress.lastError}
+                  </p>
                 ) : null}
               </div>
             ) : null}
@@ -889,7 +1092,9 @@ function App() {
               <div className="failure-list">
                 {summary.failed.slice(0, 8).map((failure) => (
                   <p key={`${failure.rowNumber}-${failure.message}`}>
-                    Ligne {failure.rowNumber} {failure.recipient ? `(${failure.recipient})` : ""}: {failure.message}
+                    Ligne {failure.rowNumber}{" "}
+                    {failure.recipient ? `(${failure.recipient})` : ""}:{" "}
+                    {failure.message}
                   </p>
                 ))}
               </div>
@@ -903,7 +1108,9 @@ function App() {
                     {currentPreviewSample ? (
                       <p className="preview-meta">
                         Ligne {currentPreviewSample.rowNumber}
-                        {currentPreviewSample.recipient ? ` - ${currentPreviewSample.recipient}` : ""}
+                        {currentPreviewSample.recipient
+                          ? ` - ${currentPreviewSample.recipient}`
+                          : ""}
                       </p>
                     ) : null}
                   </div>
@@ -912,7 +1119,9 @@ function App() {
                       <button
                         type="button"
                         className="ghost compact"
-                        onClick={() => setPreviewIndex((index) => Math.max(0, index - 1))}
+                        onClick={() =>
+                          setPreviewIndex((index) => Math.max(0, index - 1))
+                        }
                         disabled={previewIndex === 0}
                       >
                         Précédent
@@ -923,7 +1132,11 @@ function App() {
                       <button
                         type="button"
                         className="ghost compact"
-                        onClick={() => setPreviewIndex((index) => Math.min(previewSamples.length - 1, index + 1))}
+                        onClick={() =>
+                          setPreviewIndex((index) =>
+                            Math.min(previewSamples.length - 1, index + 1),
+                          )
+                        }
                         disabled={previewIndex >= previewSamples.length - 1}
                       >
                         Suivant
@@ -934,27 +1147,57 @@ function App() {
                 {currentPreviewSample && attachmentField ? (
                   currentPreviewSample.attachments.length > 0 ? (
                     <div className="attachment-preview-list">
-                      {currentPreviewSample.attachments.map((attachment, index) => (
-                        <span
-                          key={`${attachment.path}-${index}`}
-                          className={`attachment-preview ${attachment.exists ? "ok" : "missing"}`}
-                          title={attachment.path}
-                        >
-                          <strong>{attachment.filename}</strong>
-                          <span>
-                            {attachment.exists && attachment.sizeBytes !== null
-                              ? `existe - ${formatFileSize(attachment.sizeBytes)}`
-                              : attachment.message ?? "Fichier introuvable."}
-                          </span>
-                        </span>
-                      ))}
+                      {groupAttachments(currentPreviewSample.attachments).map(
+                        (group, gi) => (
+                          <div key={gi} className="attachment-group">
+                            {group.sourceDir ? (
+                              <div
+                                className="attachment-dir-header"
+                                title={group.sourceDir}
+                              >
+                                <span className="attachment-dir-icon">📁</span>
+                                <span className="attachment-dir-name">
+                                  {group.dirName ?? group.sourceDir}
+                                </span>
+                                <span className="attachment-dir-count">
+                                  {group.items.length} fichier
+                                  {group.items.length > 1 ? "s" : ""}
+                                </span>
+                              </div>
+                            ) : null}
+                            <div className="attachment-group-items">
+                              {group.items.map((attachment, index) => (
+                                <span
+                                  key={`${attachment.path}-${index}`}
+                                  className={`attachment-preview ${attachment.exists ? "ok" : "missing"}`}
+                                  title={attachment.path}
+                                >
+                                  <strong>{attachment.filename}</strong>
+                                  <span>
+                                    {attachment.exists &&
+                                    attachment.sizeBytes !== null
+                                      ? `existe - ${formatFileSize(attachment.sizeBytes)}`
+                                      : (attachment.message ??
+                                        "Fichier introuvable.")}
+                                  </span>
+                                </span>
+                              ))}
+                            </div>
+                          </div>
+                        ),
+                      )}
                     </div>
                   ) : (
-                    <p className="preview-meta">Aucune pièce jointe pour cette ligne.</p>
+                    <p className="preview-meta">
+                      Aucune pièce jointe pour cette ligne.
+                    </p>
                   )
                 ) : null}
                 <p className="preview-subject">{currentPreview.subject}</p>
-                <div className="preview-box" dangerouslySetInnerHTML={{ __html: safePreviewHtml }} />
+                <div
+                  className="preview-box"
+                  dangerouslySetInnerHTML={{ __html: safePreviewHtml }}
+                />
               </section>
             ) : (
               <p className="muted">Aucune prévisualisation.</p>
@@ -969,12 +1212,20 @@ function App() {
                 <h2>À propos</h2>
                 <p>Application bureau locale pour publipostage email.</p>
               </div>
-              <button className="primary" type="button" onClick={handleUpdate} disabled={busy}>
+              <button
+                className="primary"
+                type="button"
+                onClick={handleUpdate}
+                disabled={busy}
+              >
                 Vérifier les mises à jour
               </button>
             </div>
             <div className="about-list">
-              <p><strong>Version</strong><span>{appVersion || "…"}</span></p>
+              <p>
+                <strong>Version</strong>
+                <span>{appVersion || "…"}</span>
+              </p>
             </div>
           </section>
         ) : null}

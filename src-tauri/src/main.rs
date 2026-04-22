@@ -197,6 +197,7 @@ struct PreviewAttachment {
     exists: bool,
     size_bytes: Option<u64>,
     message: Option<String>,
+    source_dir: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -890,9 +891,115 @@ fn validate_row_attachments(
     base_dir: &Path,
 ) -> Result<(), String> {
     for path in attachment_paths_from_row(row, attachment_field, base_dir) {
-        validate_attachment_path(&path)?;
+        match fs::metadata(&path) {
+            Ok(metadata) if metadata.is_dir() => {
+                let entries = fs::read_dir(&path).map_err(|error| {
+                    format!("Impossible de lire le dossier {}: {error}", path.display())
+                })?;
+                for entry in entries.filter_map(|e| e.ok()) {
+                    let file_path = entry.path();
+                    if file_path.is_file() {
+                        validate_attachment_path(&file_path)?;
+                    }
+                }
+            }
+            _ => validate_attachment_path(&path)?,
+        }
     }
     Ok(())
+}
+
+fn preview_attachment_path(path: PathBuf) -> Vec<PreviewAttachment> {
+    match fs::metadata(&path) {
+        Ok(metadata) if metadata.is_dir() => {
+            let dir_str = path.to_string_lossy().to_string();
+            match fs::read_dir(&path) {
+                Ok(entries) => {
+                    let mut files: Vec<PathBuf> = entries
+                        .filter_map(|e| e.ok())
+                        .map(|e| e.path())
+                        .filter(|p| p.is_file())
+                        .collect();
+                    files.sort();
+                    if files.is_empty() {
+                        vec![PreviewAttachment {
+                            filename: attachment_filename(&path),
+                            path: dir_str,
+                            exists: false,
+                            size_bytes: None,
+                            message: Some("Dossier vide.".to_string()),
+                            source_dir: None,
+                        }]
+                    } else {
+                        files
+                            .into_iter()
+                            .map(|file_path| {
+                                let filename = attachment_filename(&file_path);
+                                match fs::metadata(&file_path) {
+                                    Ok(meta) => PreviewAttachment {
+                                        filename,
+                                        path: file_path.to_string_lossy().to_string(),
+                                        exists: true,
+                                        size_bytes: Some(meta.len()),
+                                        message: None,
+                                        source_dir: Some(dir_str.clone()),
+                                    },
+                                    Err(error) => PreviewAttachment {
+                                        filename,
+                                        path: file_path.to_string_lossy().to_string(),
+                                        exists: false,
+                                        size_bytes: None,
+                                        message: Some(format!("Fichier inaccessible: {error}")),
+                                        source_dir: Some(dir_str.clone()),
+                                    },
+                                }
+                            })
+                            .collect()
+                    }
+                }
+                Err(error) => vec![PreviewAttachment {
+                    filename: attachment_filename(&path),
+                    path: dir_str,
+                    exists: false,
+                    size_bytes: None,
+                    message: Some(format!("Dossier inaccessible: {error}")),
+                    source_dir: None,
+                }],
+            }
+        }
+        Ok(metadata) if metadata.is_file() => vec![PreviewAttachment {
+            filename: attachment_filename(&path),
+            path: path.to_string_lossy().to_string(),
+            exists: true,
+            size_bytes: Some(metadata.len()),
+            message: None,
+            source_dir: None,
+        }],
+        Ok(_) => vec![PreviewAttachment {
+            filename: attachment_filename(&path),
+            path: path.to_string_lossy().to_string(),
+            exists: false,
+            size_bytes: None,
+            message: Some("Type de chemin non supporté.".to_string()),
+            source_dir: None,
+        }],
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => vec![PreviewAttachment {
+            filename: attachment_filename(&path),
+            path: path.to_string_lossy().to_string(),
+            exists: false,
+            size_bytes: None,
+            message: Some("Fichier introuvable.".to_string()),
+            source_dir: None,
+        }],
+        Err(error) => vec![PreviewAttachment {
+            filename: attachment_filename(&path),
+            path: path.to_string_lossy().to_string(),
+            exists: false,
+            size_bytes: None,
+            message: Some(format!("Fichier inaccessible: {error}")),
+            source_dir: None,
+        }],
+    }
 }
 
 fn preview_row_attachments(
@@ -902,39 +1009,7 @@ fn preview_row_attachments(
 ) -> Vec<PreviewAttachment> {
     attachment_paths_from_row(row, attachment_field, base_dir)
         .into_iter()
-        .map(|path| {
-            let filename = attachment_filename(&path);
-            match fs::metadata(&path) {
-                Ok(metadata) if metadata.is_file() => PreviewAttachment {
-                    filename,
-                    path: path.to_string_lossy().to_string(),
-                    exists: true,
-                    size_bytes: Some(metadata.len()),
-                    message: None,
-                },
-                Ok(_) => PreviewAttachment {
-                    filename,
-                    path: path.to_string_lossy().to_string(),
-                    exists: false,
-                    size_bytes: None,
-                    message: Some("Ce chemin pointe vers un dossier.".to_string()),
-                },
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => PreviewAttachment {
-                    filename,
-                    path: path.to_string_lossy().to_string(),
-                    exists: false,
-                    size_bytes: None,
-                    message: Some("Fichier introuvable.".to_string()),
-                },
-                Err(error) => PreviewAttachment {
-                    filename,
-                    path: path.to_string_lossy().to_string(),
-                    exists: false,
-                    size_bytes: None,
-                    message: Some(format!("Fichier inaccessible: {error}")),
-                },
-            }
-        })
+        .flat_map(preview_attachment_path)
         .collect()
 }
 
@@ -943,10 +1018,27 @@ fn load_row_attachments(
     attachment_field: Option<&str>,
     base_dir: &Path,
 ) -> Result<Vec<EmailAttachment>, String> {
-    attachment_paths_from_row(row, attachment_field, base_dir)
-        .into_iter()
-        .map(load_attachment)
-        .collect()
+    let mut result = Vec::new();
+    for path in attachment_paths_from_row(row, attachment_field, base_dir) {
+        match fs::metadata(&path) {
+            Ok(metadata) if metadata.is_dir() => {
+                let mut files: Vec<PathBuf> = fs::read_dir(&path)
+                    .map_err(|error| {
+                        format!("Impossible de lire le dossier {}: {error}", path.display())
+                    })?
+                    .filter_map(|e| e.ok())
+                    .map(|e| e.path())
+                    .filter(|p| p.is_file())
+                    .collect();
+                files.sort();
+                for file_path in files {
+                    result.push(load_attachment(file_path)?);
+                }
+            }
+            _ => result.push(load_attachment(path)?),
+        }
+    }
+    Ok(result)
 }
 
 fn load_attachment(path: PathBuf) -> Result<EmailAttachment, String> {
